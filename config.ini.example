@@ -1,0 +1,56 @@
+; AutoNetGuard 配置文件模板
+; 使用方法：将此文件复制为 config.ini，然后填写你的账号和密码
+;   copy config.ini.example config.ini
+;
+; 注意：config.ini 包含敏感凭据，请勿提交到版本控制系统。
+
+[credentials]
+; 校园网登录账号（通常为学号@运营商，例如 2331020130239@unicom）
+user_account = YOUR_STUDENT_ID@unicom
+
+; 校园网登录密码
+user_password = YOUR_PASSWORD
+
+
+[network]
+; 校园网认证网关 IP
+gateway_ip = 10.10.10.2
+
+; 登录接口完整 URL（一般无需修改）
+login_url = http://10.10.10.2:801/eportal/portal/login
+
+; HTTP Referer 头（一般无需修改）
+referer = http://10.10.10.2/
+
+; 无线控制器 IP（从抓包的登录请求中获取）
+wlan_ac_ip = 10.0.253.2
+
+; 无线控制器名称（从抓包的登录请求中获取）
+wlan_ac_name = WS6812
+
+
+[connectivity]
+; 用于检测网络连通性的 URL，返回 HTTP 204 表示已联网
+; 可替换为其他可靠的 204 端点，例如：
+;   http://connect.rom.miui.com/generate_204
+;   http://connectivitycheck.platform.hicloud.com/generate_204
+check_url = http://www.google.cn/generate_204
+
+
+[timing]
+; 单次 HTTP 请求超时时间（秒）
+request_timeout_seconds = 8
+
+; 网络连通性检查间隔（秒）
+check_interval_seconds = 30
+
+; 登录失败后的最大重试次数
+login_retry_count = 3
+
+; 重试退避基础时间（秒），实际等待时间 = base * 2^(attempt-1)
+backoff_base_seconds = 1
+
+
+[logging]
+; 日志文件路径（相对路径基于可执行文件所在目录）
+log_file = service.log
