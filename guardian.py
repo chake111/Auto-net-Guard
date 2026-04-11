@@ -67,6 +67,13 @@ def _wait_for_wakeup_or_timeout(
     Uses ``wakeup_event.wait()`` with a short polling interval so that setting
     either event causes the guardian to resume within ≤ 0.5 s rather than
     sleeping the full *timeout*.
+
+    Note: there is a narrow race between ``wait()`` returning and ``clear()``
+    being called – a second ``set()`` arriving in that window would be silently
+    dropped.  This is intentional: the consequence is at most one missed
+    immediate-wakeup, after which the normal check interval resumes.  Only the
+    tray menu handler ever sets ``wakeup_event``, so duplicate signals are
+    harmless.
     """
     deadline = time.monotonic() + timeout
     while not stop_event.is_set():
