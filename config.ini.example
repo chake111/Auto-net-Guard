@@ -3,6 +3,15 @@
 ;   copy config.ini.example config.ini
 ;
 ; 注意：config.ini 包含敏感凭据，请勿提交到版本控制系统。
+;
+; ── 凭据加密说明 ──────────────────────────────────────────────────────────
+; 首次运行时，程序会自动使用与当前机器绑定的密钥（基于 Windows MachineGuid
+; 或主机名+MAC 地址，经 PBKDF2-HMAC-SHA256 派生）对 user_account 和
+; user_password 进行 Fernet 对称加密，并将加密后的值（以 "ENC:" 为前缀）
+; 回写到 config.ini，明文密码不再落盘。
+;
+; 如果将 config.ini 复制到其他机器，由于密钥不同将无法解密；此时只需将
+; user_account 和 user_password 恢复为明文，重新启动程序即可自动完成加密。
 
 [credentials]
 ; 校园网登录账号（通常为学号@运营商，例如 2331020130239@unicom）
