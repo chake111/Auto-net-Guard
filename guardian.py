@@ -27,19 +27,10 @@ from pathlib import Path
 import requests
 
 try:
-    from config import BACKOFF_BASE_SECONDS
-    from config import CHECK_INTERVAL_SECONDS
-    from config import CONNECTIVITY_URL
-    from config import GATEWAY_IP
-    from config import LOG_FILE
-    from config import LOGIN_RETRY_COUNT
-    from config import LOGIN_URL
-    from config import REFERER
-    from config import REQUEST_TIMEOUT_SECONDS
-    from config import USER_ACCOUNT
-    from config import USER_PASSWORD
-    from config import WLAN_AC_IP
-    from config import WLAN_AC_NAME
+    import config as _cfg
+    # 验证必填凭据存在（KeyError 说明 config.ini 缺失或配置不完整）
+    _cfg.USER_ACCOUNT  # noqa: B018
+    _cfg.USER_PASSWORD  # noqa: B018
 except KeyError as _cfg_err:
     _copy_cmd = "copy" if sys.platform == "win32" else "cp"
     _edit_cmd = "notepad" if sys.platform == "win32" else "nano"
@@ -85,7 +76,7 @@ def setup_logging() -> None:
     if LOGGER.handlers:
         return
 
-    log_path = _runtime_dir() / LOG_FILE
+    log_path = _runtime_dir() / _cfg.LOG_FILE
     file_handler = RotatingFileHandler(
         log_path,
         maxBytes=2 * 1024 * 1024,
@@ -155,7 +146,7 @@ def _normalize_mac(mac: str) -> str:
 def get_active_ip() -> str:
     """Discover the active local IPv4 used to reach the gateway."""
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        sock.connect((GATEWAY_IP, 53))
+        sock.connect((_cfg.GATEWAY_IP, 53))
         return sock.getsockname()[0]
 
 
@@ -188,14 +179,14 @@ def _build_login_params(ip: str, mac: str) -> dict[str, str]:
     return {
         "callback": "dr1003",
         "login_method": "1",
-        "user_account": USER_ACCOUNT,
-        "user_password": USER_PASSWORD,
+        "user_account": _cfg.USER_ACCOUNT,
+        "user_password": _cfg.USER_PASSWORD,
         "wlan_user_ip": ip,
         "wlan_user_ipv6": "",
         "wlan_user_mac": mac,
         "wlan_vlan_id": "0",
-        "wlan_ac_ip": WLAN_AC_IP,
-        "wlan_ac_name": WLAN_AC_NAME,
+        "wlan_ac_ip": _cfg.WLAN_AC_IP,
+        "wlan_ac_name": _cfg.WLAN_AC_NAME,
         "authex_enable": "",
         "jsVersion": "4.2.2",
         "terminal_type": "1",
@@ -207,8 +198,8 @@ def _build_login_params(ip: str, mac: str) -> dict[str, str]:
 def check_connectivity(session: requests.Session) -> bool:
     try:
         response = session.get(
-            CONNECTIVITY_URL,
-            timeout=REQUEST_TIMEOUT_SECONDS,
+            _cfg.CONNECTIVITY_URL,
+            timeout=_cfg.REQUEST_TIMEOUT_SECONDS,
             allow_redirects=False,
         )
         return response.status_code == 204
@@ -220,10 +211,10 @@ def check_connectivity(session: requests.Session) -> bool:
 def _do_login(session: requests.Session, ip: str, mac: str) -> bool:
     params = _build_login_params(ip=ip, mac=mac)
     response = session.get(
-        LOGIN_URL,
+        _cfg.LOGIN_URL,
         params=params,
-        headers={"Referer": REFERER},
-        timeout=REQUEST_TIMEOUT_SECONDS,
+        headers={"Referer": _cfg.REFERER},
+        timeout=_cfg.REQUEST_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
 
@@ -239,14 +230,14 @@ def _do_login(session: requests.Session, ip: str, mac: str) -> bool:
 
 
 def login_with_retry(session: requests.Session) -> bool:
-    for attempt in range(1, LOGIN_RETRY_COUNT + 1):
+    for attempt in range(1, _cfg.LOGIN_RETRY_COUNT + 1):
         try:
             ip = get_active_ip()
             mac = get_active_mac()
             LOGGER.info(
                 "Login attempt %s/%s | ip=%s | mac=%s",
                 attempt,
-                LOGIN_RETRY_COUNT,
+                _cfg.LOGIN_RETRY_COUNT,
                 ip,
                 mac,
             )
@@ -257,8 +248,8 @@ def login_with_retry(session: requests.Session) -> bool:
         except Exception as exc:  # pylint: disable=broad-except
             LOGGER.error("Login error on attempt %s: %s", attempt, exc)
 
-        if attempt < LOGIN_RETRY_COUNT:
-            delay = BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+        if attempt < _cfg.LOGIN_RETRY_COUNT:
+            delay = _cfg.BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
             LOGGER.info("Retrying in %s seconds.", delay)
             time.sleep(delay)
 
@@ -334,7 +325,7 @@ def guardian_target(state: AppState, stop_event: threading.Event) -> None:
             LOGGER.exception("Unhandled guardian error: %s", exc)
             state.status = NetStatus.UNKNOWN
 
-        stop_event.wait(timeout=CHECK_INTERVAL_SECONDS)
+        stop_event.wait(timeout=_cfg.CHECK_INTERVAL_SECONDS)
 
     LOGGER.info("Guardian thread stopped.")
 

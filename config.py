@@ -231,3 +231,103 @@ BACKOFF_BASE_SECONDS: int = int(_get("timing", "backoff_base_seconds", fallback=
 # ---------------------------------------------------------------------------
 
 LOG_FILE: str = _get("logging", "log_file", fallback="service.log")
+
+# ---------------------------------------------------------------------------
+# Runtime config update helpers (used by the GUI settings window)
+# ---------------------------------------------------------------------------
+
+
+def save_config(
+    user_account: str,
+    user_password: str,
+    gateway_ip: str,
+    login_url: str,
+    check_interval_seconds: int,
+) -> None:
+    """将新配置写入 config.ini 并同步更新模块全局变量（热加载）。
+
+    凭据以明文形式写入文件，随后由 ``_maybe_encrypt_credentials`` 加密并回写，
+    确保与已有的加密逻辑完全兼容。
+
+    守护进程通过 ``import config as _cfg`` 读取配置，因此下一次循环迭代
+    时即可自动感知新值，无需重启守护线程。
+    """
+    global _parser  # noqa: PLW0603
+    global USER_ACCOUNT, USER_PASSWORD, GATEWAY_IP, GATEWAY_HOST  # noqa: PLW0603
+    global LOGIN_URL, REFERER, CHECK_INTERVAL_SECONDS  # noqa: PLW0603
+
+    # 读取现有配置文件，保留本次未修改的字段
+    parser = configparser.ConfigParser()
+    parser.read(_CONFIG_PATH, encoding="utf-8")
+
+    def _ensure(section: str) -> None:
+        if not parser.has_section(section):
+            parser.add_section(section)
+
+    _ensure("credentials")
+    # 存明文；_maybe_encrypt_credentials 随后将其加密并回写
+    parser.set("credentials", "user_account", user_account)
+    parser.set("credentials", "user_password", user_password)
+
+    _ensure("network")
+    parser.set("network", "gateway_ip", gateway_ip)
+    parser.set("network", "login_url", login_url)
+    parser.set("network", "referer", f"http://{gateway_ip}/")
+
+    _ensure("timing")
+    parser.set("timing", "check_interval_seconds", str(check_interval_seconds))
+
+    with _CONFIG_PATH.open("w", encoding="utf-8") as fh:
+        parser.write(fh)
+
+    # 加密明文凭据并回写文件
+    _maybe_encrypt_credentials(parser, _CONFIG_PATH)
+
+    # 更新模块全局 parser（_get 依赖它）及所有常量
+    _parser = parser
+    USER_ACCOUNT = user_account
+    USER_PASSWORD = user_password
+    GATEWAY_IP = gateway_ip
+    GATEWAY_HOST = f"http://{gateway_ip}"
+    LOGIN_URL = login_url
+    REFERER = f"http://{gateway_ip}/"
+    CHECK_INTERVAL_SECONDS = check_interval_seconds
+
+
+def reload_config() -> None:
+    """从 config.ini 重新加载全部配置项并更新模块全局变量。
+
+    可在守护进程重启前调用，确保新线程拿到最新值。
+    """
+    global _parser  # noqa: PLW0603
+    global USER_ACCOUNT, USER_PASSWORD, GATEWAY_IP, GATEWAY_HOST  # noqa: PLW0603
+    global LOGIN_URL, REFERER, WLAN_AC_IP, WLAN_AC_NAME  # noqa: PLW0603
+    global CONNECTIVITY_URL, REQUEST_TIMEOUT_SECONDS, CHECK_INTERVAL_SECONDS  # noqa: PLW0603
+    global LOGIN_RETRY_COUNT, BACKOFF_BASE_SECONDS, LOG_FILE  # noqa: PLW0603
+
+    _parser = configparser.ConfigParser()
+    _parser.read(_CONFIG_PATH, encoding="utf-8")
+    _maybe_encrypt_credentials(_parser, _CONFIG_PATH)
+
+    USER_ACCOUNT = _get("credentials", "user_account")
+    USER_PASSWORD = _get("credentials", "user_password")
+    GATEWAY_IP = _get("network", "gateway_ip", fallback=GATEWAY_IP)
+    GATEWAY_HOST = f"http://{GATEWAY_IP}"
+    LOGIN_URL = _get("network", "login_url", fallback=LOGIN_URL)
+    REFERER = _get("network", "referer", fallback=REFERER)
+    WLAN_AC_IP = _get("network", "wlan_ac_ip", fallback=WLAN_AC_IP)
+    WLAN_AC_NAME = _get("network", "wlan_ac_name", fallback=WLAN_AC_NAME)
+    CONNECTIVITY_URL = _get("connectivity", "check_url", fallback=CONNECTIVITY_URL)
+    REQUEST_TIMEOUT_SECONDS = int(
+        _get("timing", "request_timeout_seconds", fallback=str(REQUEST_TIMEOUT_SECONDS))
+    )
+    CHECK_INTERVAL_SECONDS = int(
+        _get("timing", "check_interval_seconds", fallback=str(CHECK_INTERVAL_SECONDS))
+    )
+    LOGIN_RETRY_COUNT = int(
+        _get("timing", "login_retry_count", fallback=str(LOGIN_RETRY_COUNT))
+    )
+    BACKOFF_BASE_SECONDS = int(
+        _get("timing", "backoff_base_seconds", fallback=str(BACKOFF_BASE_SECONDS))
+    )
+    LOG_FILE = _get("logging", "log_file", fallback=LOG_FILE)
