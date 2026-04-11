@@ -41,11 +41,13 @@ try:
     from config import WLAN_AC_IP
     from config import WLAN_AC_NAME
 except KeyError as _cfg_err:
+    _copy_cmd = "copy" if sys.platform == "win32" else "cp"
+    _edit_cmd = "notepad" if sys.platform == "win32" else "nano"
     print(
         f"\n[AutoNetGuard] 配置错误: {_cfg_err}\n"
         "请将 config.ini.example 复制为 config.ini 并填写你的账号和密码。\n"
-        "  copy config.ini.example config.ini\n"
-        "  notepad config.ini\n",
+        f"  {_copy_cmd} config.ini.example config.ini\n"
+        f"  {_edit_cmd} config.ini\n",
         file=sys.stderr,
     )
     sys.exit(1)
@@ -281,10 +283,15 @@ def guardian_target(state: AppState, stop_event: threading.Event) -> None:
     LOGGER.info("AutoNetGuard guardian started (pid=%s, tid=%s).",
                 os.getpid(), threading.get_ident())
 
+    _platform_ua = {
+        "win32": "Windows NT 10.0; Win64; x64",
+        "darwin": "Macintosh; Intel Mac OS X 14_0",
+    }.get(sys.platform, "X11; Linux x86_64")
+
     session = requests.Session()
     session.headers.update(
         {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AutoNetGuard/1.0",
+            "User-Agent": f"Mozilla/5.0 ({_platform_ua}) AutoNetGuard/1.0",
             "Accept": "*/*",
         }
     )

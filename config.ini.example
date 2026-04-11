@@ -1,6 +1,7 @@
 ; AutoNetGuard 配置文件模板
 ; 使用方法：将此文件复制为 config.ini，然后填写你的账号和密码
-;   copy config.ini.example config.ini
+;   Windows:      copy config.ini.example config.ini
+;   Linux/macOS:  cp config.ini.example config.ini
 ;
 ; 注意：config.ini 包含敏感凭据，请勿提交到版本控制系统。
 ;

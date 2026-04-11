@@ -1,4 +1,4 @@
-"""AutoNetGuard – system-tray icon and menu (Windows).
+"""AutoNetGuard – system-tray icon and menu.
 
 Architecture
 ------------
