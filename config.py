@@ -192,6 +192,15 @@ def _get(section: str, key: str, fallback: str | None = None) -> str:
     return value
 
 
+def _parse_bool(value: str) -> bool:
+    """Parse a config string as a boolean value.
+
+    Returns ``False`` only for the canonical false-y strings; everything else
+    is treated as ``True`` to match common INI-file conventions.
+    """
+    return value.lower() not in ("false", "0", "no", "off")
+
+
 # ---------------------------------------------------------------------------
 # [credentials]
 # ---------------------------------------------------------------------------
@@ -236,7 +245,7 @@ LOG_FILE: str = _get("logging", "log_file", fallback="service.log")
 # [ui]
 # ---------------------------------------------------------------------------
 
-ENABLE_NOTIFICATIONS: bool = _get("ui", "enable_notifications", fallback="true").lower() not in ("false", "0", "no", "off")
+ENABLE_NOTIFICATIONS: bool = _parse_bool(_get("ui", "enable_notifications", fallback="true"))
 
 # ---------------------------------------------------------------------------
 # [auth]
@@ -393,4 +402,4 @@ def reload_config() -> None:
         "auth", "auth_success_markers", fallback=AUTH_SUCCESS_MARKERS
     )
     AUTH_PARAMS = _load_auth_params(_parser)
-    ENABLE_NOTIFICATIONS = _get("ui", "enable_notifications", fallback="true").lower() not in ("false", "0", "no", "off")
+    ENABLE_NOTIFICATIONS = _parse_bool(_get("ui", "enable_notifications", fallback="true"))

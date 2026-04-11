@@ -237,8 +237,13 @@ class TrayController:
 
         ``pystray``'s ``icon.notify()`` is thread-safe and posts the
         notification asynchronously, so calling it here is safe.
+
+        ``config`` is imported lazily inside this method so that changes made
+        via the GUI settings window (which call ``config.save_config()`` /
+        ``config.reload_config()``) are reflected immediately without a
+        restart – the same hot-reload strategy used in ``guardian_target``.
         """
-        import config as _cfg  # noqa: PLC0415  (delayed import for hot-reload support)
+        import config as _cfg  # noqa: PLC0415
 
         if not _cfg.ENABLE_NOTIFICATIONS:
             return
