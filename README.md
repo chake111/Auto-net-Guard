@@ -13,19 +13,21 @@ Auto-net-Guard 是一个基于 Python 的网络监控与自动重连守护工具
 - 断网后自动触发认证登录，并支持失败重试与退避。
 - 系统托盘菜单显示当前状态、上次登录时间和断线次数。
 - 支持从托盘菜单直接触发“立即重新登录”。
-- 支持开机自启开关（Windows 当前用户注册表）。
+- 凭据加密存储：首次运行自动使用与当前机器绑定的 Fernet 密钥加密 `config.ini` 中的账号与密码，明文不再落盘。
+- 支持开机自启开关（Windows 注册表 / macOS LaunchAgent / Linux XDG 自启动）。
 - 使用 `config.ini` 管理账号、网关、检测地址和重试参数。
 - 提供单实例运行保护与日志轮转记录。
+- 跨平台支持：Windows、macOS、Linux 均可运行。
 
 ## 环境依赖
 
 - Python 3.8 及以上版本。
-- 推荐运行平台：Windows（托盘与开机自启功能以 Windows 为主）。
+- 支持平台：Windows、macOS、Linux。
 
 安装基础依赖：
 
 ```bash
-pip install requests psutil pystray pillow
+pip install requests psutil pystray pillow cryptography
 ```
 
 如需打包：
@@ -98,7 +100,7 @@ python guardian.py
 python build.py
 ```
 
-执行后会在 `dist/` 目录生成可执行文件 `AutoNetGuard.exe`，并自动复制 `config.ini.example` 到同目录。运行前请在 `dist/` 下创建并填写 `config.ini`。
+执行后会在 `dist/` 目录生成可执行文件（Windows 为 `AutoNetGuard.exe`，macOS/Linux 为 `AutoNetGuard`），并自动复制 `config.ini.example` 到同目录。运行前请在 `dist/` 下创建并填写 `config.ini`。
 
 ## 许可证与贡献
 
