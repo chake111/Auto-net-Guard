@@ -1,7 +1,7 @@
 # Auto-net-Guard
 
 ![Python](https://img.shields.io/badge/Python-100%25-3776AB?logo=python&logoColor=white)
-![License](https://img.shields.io/badge/License-Not%20Specified-lightgrey)
+![License](https://img.shields.io/badge/License-MIT-blue)
 
 ## 项目简介
 
@@ -103,4 +103,4 @@ python build.py
 ## 许可证与贡献
 
 - 欢迎通过 Issue 提交问题、通过 Pull Request 提交改进。
-- 当前仓库未包含明确的许可证文件。如需开源分发，建议补充 `LICENSE` 文件并明确授权范围。
+- 本项目采用 [MIT 许可证](LICENSE) 进行开源分发，允许自由使用、修改和再分发，需保留版权声明。
