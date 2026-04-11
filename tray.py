@@ -39,6 +39,20 @@ class NetStatus(Enum):
     LOGGING_IN = auto()
 
 
+def _get_notify_message(old: NetStatus, new: NetStatus) -> tuple[str, str] | None:
+    """Return a ``(title, message)`` pair for a noteworthy status transition.
+
+    Returns ``None`` for transitions that do not warrant a desktop notification.
+    """
+    if old == NetStatus.ONLINE and new == NetStatus.LOGGING_IN:
+        return ("AutoNetGuard", "检测到断网，准备重新登录")
+    if old == NetStatus.LOGGING_IN and new == NetStatus.ONLINE:
+        return ("AutoNetGuard", "重新认证成功，网络已恢复")
+    if old == NetStatus.LOGGING_IN and new == NetStatus.OFFLINE:
+        return ("AutoNetGuard", "多次尝试登录失败，请检查账号或网关")
+    return None
+
+
 @dataclass
 class AppState:
     """Thread-safe container for runtime status shared between tray and guardian."""
@@ -51,6 +65,10 @@ class AppState:
 
     # Called by the tray whenever it needs to refresh the menu / tooltip
     on_status_change: Callable[[], None] | None = field(default=None, repr=False)
+
+    # Called when a noteworthy status transition occurs; args are (title, message).
+    # Executed on whatever thread changes the status – must be non-blocking.
+    on_notify: Callable[[str, str], None] | None = field(default=None, repr=False)
 
     # GUI 保存配置后设置此事件，通知后台可以感知配置变更（如记录日志、刷新菜单）
     config_changed: threading.Event = field(
@@ -67,9 +85,16 @@ class AppState:
     def status(self, value: NetStatus) -> None:
         with self._lock:
             changed = self._status != value
+            old_status = self._status
             self._status = value
-        if changed and self.on_status_change:
-            self.on_status_change()
+        if changed:
+            if self.on_status_change:
+                self.on_status_change()
+            if self.on_notify:
+                notification = _get_notify_message(old_status, value)
+                if notification:
+                    title, message = notification
+                    self.on_notify(title, message)
 
     # ---- last_login_time ----
     @property
@@ -167,6 +192,8 @@ class TrayController:
 
         # Wire state changes → icon update
         state.on_status_change = self._refresh_icon
+        # Wire status transitions → desktop notification
+        state.on_notify = self._send_notification
 
     # ---- menu actions -------------------------------------------------------
 
@@ -199,6 +226,29 @@ class TrayController:
     def _on_quit(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:  # noqa: ARG002
         self._stop_event.set()
         icon.stop()
+
+    # ---- notifications ------------------------------------------------------
+
+    def _send_notification(self, title: str, message: str) -> None:
+        """Send a desktop notification if notifications are enabled.
+
+        This method is called from the background guardian thread via the
+        ``AppState.on_notify`` callback.  It must be non-blocking.
+
+        ``pystray``'s ``icon.notify()`` is thread-safe and posts the
+        notification asynchronously, so calling it here is safe.
+        """
+        import config as _cfg  # noqa: PLC0415  (delayed import for hot-reload support)
+
+        if not _cfg.ENABLE_NOTIFICATIONS:
+            return
+        if self._icon is None:
+            return
+        try:
+            self._icon.notify(message, title)
+        except Exception:  # pylint: disable=broad-except  # noqa: BLE001
+            # Notification delivery is best-effort; never crash the guardian loop.
+            pass
 
     # ---- menu builder -------------------------------------------------------
 

@@ -233,6 +233,12 @@ BACKOFF_BASE_SECONDS: int = int(_get("timing", "backoff_base_seconds", fallback=
 LOG_FILE: str = _get("logging", "log_file", fallback="service.log")
 
 # ---------------------------------------------------------------------------
+# [ui]
+# ---------------------------------------------------------------------------
+
+ENABLE_NOTIFICATIONS: bool = _get("ui", "enable_notifications", fallback="true").lower() not in ("false", "0", "no", "off")
+
+# ---------------------------------------------------------------------------
 # [auth]
 # ---------------------------------------------------------------------------
 
@@ -286,6 +292,7 @@ def save_config(
     gateway_ip: str,
     login_url: str,
     check_interval_seconds: int,
+    enable_notifications: bool = True,
 ) -> None:
     """将新配置写入 config.ini 并同步更新模块全局变量（热加载）。
 
@@ -297,7 +304,7 @@ def save_config(
     """
     global _parser  # noqa: PLW0603
     global USER_ACCOUNT, USER_PASSWORD, GATEWAY_IP, GATEWAY_HOST  # noqa: PLW0603
-    global LOGIN_URL, REFERER, CHECK_INTERVAL_SECONDS  # noqa: PLW0603
+    global LOGIN_URL, REFERER, CHECK_INTERVAL_SECONDS, ENABLE_NOTIFICATIONS  # noqa: PLW0603
 
     # 读取现有配置文件，保留本次未修改的字段
     parser = configparser.ConfigParser()
@@ -320,6 +327,9 @@ def save_config(
     _ensure("timing")
     parser.set("timing", "check_interval_seconds", str(check_interval_seconds))
 
+    _ensure("ui")
+    parser.set("ui", "enable_notifications", "true" if enable_notifications else "false")
+
     with _CONFIG_PATH.open("w", encoding="utf-8") as fh:
         parser.write(fh)
 
@@ -335,6 +345,7 @@ def save_config(
     LOGIN_URL = login_url
     REFERER = f"http://{gateway_ip}/"
     CHECK_INTERVAL_SECONDS = check_interval_seconds
+    ENABLE_NOTIFICATIONS = enable_notifications
 
 
 def reload_config() -> None:
@@ -348,6 +359,7 @@ def reload_config() -> None:
     global CONNECTIVITY_URL, REQUEST_TIMEOUT_SECONDS, CHECK_INTERVAL_SECONDS  # noqa: PLW0603
     global LOGIN_RETRY_COUNT, BACKOFF_BASE_SECONDS, LOG_FILE  # noqa: PLW0603
     global AUTH_TYPE, AUTH_METHOD, AUTH_SUCCESS_MARKERS, AUTH_PARAMS  # noqa: PLW0603
+    global ENABLE_NOTIFICATIONS  # noqa: PLW0603
 
     _parser = configparser.ConfigParser()
     _parser.read(_CONFIG_PATH, encoding="utf-8")
@@ -381,3 +393,4 @@ def reload_config() -> None:
         "auth", "auth_success_markers", fallback=AUTH_SUCCESS_MARKERS
     )
     AUTH_PARAMS = _load_auth_params(_parser)
+    ENABLE_NOTIFICATIONS = _get("ui", "enable_notifications", fallback="true").lower() not in ("false", "0", "no", "off")
