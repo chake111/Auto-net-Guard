@@ -58,6 +58,9 @@ enable_notifications = true
 auth_type = drcom
 auth_method = POST
 auth_success_markers = success,登录成功
+
+[srun]
+acid = 1
 """
 
 # Only write if a real config.ini is absent so we never clobber user credentials.

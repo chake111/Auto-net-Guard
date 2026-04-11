@@ -75,6 +75,7 @@ enable_notifications = true
 ; 认证协议类型，支持以下值：
 ;   drcom        – Dr.COM / Ruijie iPortal 校园网门户（默认，适用大多数高校）
 ;   generic_post – 通用 HTTP 表单认证（支持 GET/POST，参数由 [auth_params] 配置）
+;   srun         – 深澜 (Srun) 校园网门户（挑战–响应 XXTEA 加密，适用深澜部署高校）
 auth_type = drcom
 
 ; 以下选项仅在 auth_type = generic_post 时生效 ──────────────────────────────
@@ -101,4 +102,11 @@ auth_type = drcom
 ; user_ip    = {ip}
 ; user_mac   = {mac}
 ; ac_id      = 1
+
+
+[srun]
+; 仅在 auth_type = srun 时使用。
+;
+; AC-ID：从学校门户登录页面源码或抓包中获取（通常为数字，常见值为 1）。
+; acid = 1
 
