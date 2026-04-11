@@ -1,0 +1,110 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            arch: amd64
+            binary: AutoNetGuard.exe
+            archive_ext: zip
+          - os: macos-latest
+            arch: arm64
+            binary: AutoNetGuard
+            archive_ext: tar.gz
+          - os: ubuntu-latest
+            arch: amd64
+            binary: AutoNetGuard
+            archive_ext: tar.gz
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            python3-tk \
+            libgirepository1.0-dev \
+            gir1.2-gtk-3.0 \
+            gir1.2-appindicator3-0.1 \
+            libappindicator3-dev
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Build with PyInstaller
+        run: python build.py
+
+      - name: Determine archive name
+        id: archive
+        shell: bash
+        run: |
+          TAG="${{ github.ref_name }}"
+          OS="${{ runner.os }}"
+          case "$OS" in
+            Windows) PLATFORM="windows" ;;
+            macOS)   PLATFORM="macos" ;;
+            Linux)   PLATFORM="linux" ;;
+          esac
+          ARCH="${{ matrix.arch }}"
+          EXT="${{ matrix.archive_ext }}"
+          echo "name=AutoNetGuard-${TAG}-${PLATFORM}-${ARCH}.${EXT}" >> "$GITHUB_OUTPUT"
+          echo "platform=$PLATFORM" >> "$GITHUB_OUTPUT"
+
+      - name: Create archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = "${{ steps.archive.outputs.name }}"
+          Compress-Archive -Path dist\${{ matrix.binary }}, dist\config.ini.example -DestinationPath $archive
+
+      - name: Create archive (Linux / macOS)
+        if: runner.os != 'Windows'
+        run: |
+          tar -czf "${{ steps.archive.outputs.name }}" \
+            -C dist "${{ matrix.binary }}" config.ini.example
+
+      - name: Upload archive as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.archive.outputs.name }}
+          path: ${{ steps.archive.outputs.name }}
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release_assets
+          merge-multiple: true
+
+      - name: Upload assets to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release_assets/*
+          generate_release_notes: true
