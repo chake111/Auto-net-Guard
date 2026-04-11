@@ -70,7 +70,7 @@ class GenericPostAuthenticator(BaseAuthenticator):
         import config as _cfg  # noqa: PLC0415
 
         return [
-            m.strip()
+            m.strip().lower()
             for m in _cfg.AUTH_SUCCESS_MARKERS.split(",")
             if m.strip()
         ]
