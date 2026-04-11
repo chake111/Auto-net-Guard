@@ -15,6 +15,14 @@ from auth_plugins import (
     SrunAuthenticator,
     get_authenticator,
 )
+from auth_plugins.srun import (
+    _encode_info,
+    _hmac_md5_password,
+    _parse_jsonp,
+    _sha1_chksum,
+    _srun_b64encode,
+    _xencode,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -381,15 +389,6 @@ class TestBaseAuthenticatorCheckStatus:
 # SrunAuthenticator – encoding helpers
 # ---------------------------------------------------------------------------
 
-from auth_plugins.srun import (  # noqa: E402
-    _encode_info,
-    _hmac_md5_password,
-    _parse_jsonp,
-    _sha1_chksum,
-    _srun_b64encode,
-    _xencode,
-)
-
 
 class TestSrunEncodingHelpers:
     def test_xencode_empty_returns_empty_bytes(self):
@@ -475,8 +474,6 @@ class TestSrunEncodingHelpers:
 # ---------------------------------------------------------------------------
 # SrunAuthenticator – login
 # ---------------------------------------------------------------------------
-
-from auth_plugins.srun import SrunAuthenticator  # noqa: E402
 
 
 class TestSrunAuthenticatorLogin:

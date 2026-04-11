@@ -178,11 +178,16 @@ def _encode_info(
 
 
 def _hmac_md5_password(password: str, challenge: str) -> str:
-    """Return the ``{MD5}``-prefixed HMAC-MD5 of *password* keyed by *challenge*."""
+    """Return the ``{MD5}``-prefixed HMAC-MD5 of *password* keyed by *challenge*.
+
+    MD5 is required here by the Srun portal protocol specification; it is not
+    used for password *storage*.  ``usedforsecurity=False`` signals this to
+    static analysers.
+    """
     digest = _hmac_mod.new(
         challenge.encode("utf-8"),
         password.encode("utf-8"),
-        hashlib.md5,
+        lambda: hashlib.md5(usedforsecurity=False),  # type: ignore[call-arg]
     ).hexdigest()
     return "{MD5}" + digest
 
@@ -201,12 +206,16 @@ def _sha1_chksum(
 
     The checksum covers all key parameters interleaved with the challenge
     as a separator (no additional delimiter between values).
+
+    SHA-1 is required here by the Srun portal protocol specification; it is
+    not used for password storage.  ``usedforsecurity=False`` signals this
+    to static analysers.
     """
     sep = challenge
     data = sep.join([user, password_md5, acid, ip, n, type_, info])
     # Prepend and append challenge as well (matching the portal expectation).
     chkstr = challenge + data + challenge
-    return hashlib.sha1(chkstr.encode("utf-8")).hexdigest()
+    return hashlib.sha1(chkstr.encode("utf-8"), usedforsecurity=False).hexdigest()  # type: ignore[call-arg]
 
 
 def _parse_jsonp(text: str) -> dict:
@@ -400,7 +409,7 @@ class SrunAuthenticator(BaseAuthenticator):
             data = _parse_jsonp(response.text)
             # The portal returns "res": "ok" when the IP is currently online.
             return data.get("res") == "ok"
-        except Exception:  # pylint: disable=broad-except
+        except (requests.RequestException, ValueError, json.JSONDecodeError):
             # Fall back to connectivity URL check.
             return super().check_status(session)
 
