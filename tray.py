@@ -75,6 +75,12 @@ class AppState:
         default_factory=threading.Event, repr=False
     )
 
+    # 设置此事件可唤醒守护线程的定时等待，使其立即进入下一轮检测循环。
+    # 切换 Profile 后由托盘菜单处理器设置，以触发即时重连。
+    wakeup_event: threading.Event = field(
+        default_factory=threading.Event, repr=False
+    )
+
     # ---- status ----
     @property
     def status(self) -> NetStatus:
@@ -227,6 +233,56 @@ class TrayController:
         self._stop_event.set()
         icon.stop()
 
+    # ---- profile switching --------------------------------------------------
+
+    def _on_switch_profile(self, name: str) -> None:
+        """Switch the active network profile and trigger an immediate reconnect.
+
+        Steps:
+        1. Persist the new ``active_profile`` value to ``config.ini`` and
+           reload all module globals (via :func:`config.switch_profile`).
+        2. Signal the guardian thread that configuration has changed.
+        3. Wake the guardian thread from its inter-check sleep so that it
+           applies the new profile and attempts reconnection without waiting
+           for the full ``CHECK_INTERVAL_SECONDS`` timeout.
+        4. Refresh the tray menu so the active-profile tick mark updates.
+        """
+        import config as _cfg  # noqa: PLC0415
+
+        _cfg.switch_profile(name)
+        self._state.config_changed.set()
+        self._state.wakeup_event.set()
+        # Rebuild menu immediately so the ✔ mark reflects the new profile
+        if self._icon:
+            self._icon.menu = self._build_menu()
+            self._icon.update_menu()
+
+    def _build_profile_submenu(self) -> pystray.Menu:
+        """Build the dynamic "切换网络环境" submenu from configured profiles."""
+        import config as _cfg  # noqa: PLC0415
+
+        profiles = _cfg.list_profiles()
+        active = _cfg.get_active_profile()
+
+        if not profiles:
+            return pystray.Menu(
+                pystray.MenuItem("（请在 config.ini 中配置 profile）", None, enabled=False),
+            )
+
+        def _make_handler(profile_name: str):
+            def _handler(icon: pystray.Icon, item: pystray.MenuItem) -> None:  # noqa: ARG001
+                self._on_switch_profile(profile_name)
+            return _handler
+
+        items = [
+            pystray.MenuItem(
+                f"✔ {name}" if name == active else f"  {name}",
+                _make_handler(name),
+            )
+            for name in profiles
+        ]
+        return pystray.Menu(*items)
+
     # ---- notifications ------------------------------------------------------
 
     def _send_notification(self, title: str, message: str) -> None:
@@ -268,6 +324,7 @@ class TrayController:
             pystray.MenuItem(summary_text, None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("立即重新登录", self._on_login_now),
+            pystray.MenuItem("切换网络环境", self._build_profile_submenu()),
             pystray.MenuItem("设置 (Settings)", self._on_open_settings),
             pystray.MenuItem(autostart_label, self._on_toggle_autostart),
             pystray.Menu.SEPARATOR,

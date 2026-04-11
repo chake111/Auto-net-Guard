@@ -56,6 +56,28 @@ from tray import AppState, NetStatus, run_tray
 
 LOGGER = logging.getLogger("autonetguard")
 
+
+def _wait_for_wakeup_or_timeout(
+    stop_event: threading.Event,
+    wakeup_event: threading.Event,
+    timeout: float,
+) -> None:
+    """Sleep for *timeout* seconds, waking early if *stop_event* or *wakeup_event* is set.
+
+    Uses ``wakeup_event.wait()`` with a short polling interval so that setting
+    either event causes the guardian to resume within ≤ 0.5 s rather than
+    sleeping the full *timeout*.
+    """
+    deadline = time.monotonic() + timeout
+    while not stop_event.is_set():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        if wakeup_event.wait(timeout=min(0.5, remaining)):
+            wakeup_event.clear()
+            break
+
+
 # ---------------------------------------------------------------------------
 # Runtime directory & PID file
 # ---------------------------------------------------------------------------
@@ -341,7 +363,7 @@ def guardian_target(state: AppState, stop_event: threading.Event) -> None:
             LOGGER.exception("Unhandled guardian error: %s", exc)
             state.status = NetStatus.UNKNOWN
 
-        stop_event.wait(timeout=_cfg.CHECK_INTERVAL_SECONDS)
+        _wait_for_wakeup_or_timeout(stop_event, state.wakeup_event, _cfg.CHECK_INTERVAL_SECONDS)
 
     LOGGER.info("Guardian thread stopped.")
 
