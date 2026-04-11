@@ -20,6 +20,7 @@ from guardian import (
     login_with_retry,
     release_instance_lock,
 )
+from auth_plugins import DrcomAuthenticator
 from tray import AppState, NetStatus
 
 
@@ -203,40 +204,47 @@ class TestDoLogin:
 # ---------------------------------------------------------------------------
 
 class TestLoginWithRetry:
+    def _make_authenticator(self, return_value: bool = True) -> MagicMock:
+        auth = MagicMock(spec=DrcomAuthenticator)
+        auth.login.return_value = return_value
+        return auth
+
     def test_returns_true_on_first_successful_attempt(self):
         session = MagicMock()
+        auth = self._make_authenticator(return_value=True)
         with (
             patch("guardian.get_active_ip", return_value="10.0.0.1"),
             patch("guardian.get_active_mac", return_value="aabbccddeeff"),
-            patch("guardian._do_login", return_value=True),
         ):
-            assert login_with_retry(session) is True
+            assert login_with_retry(session, auth) is True
 
     def test_returns_false_when_all_retries_fail(self):
         session = MagicMock()
+        auth = self._make_authenticator(return_value=False)
         with (
             patch("guardian.get_active_ip", return_value="10.0.0.1"),
             patch("guardian.get_active_mac", return_value="aabbccddeeff"),
-            patch("guardian._do_login", return_value=False),
             patch("guardian.time.sleep"),
         ):
-            assert login_with_retry(session) is False
+            assert login_with_retry(session, auth) is False
 
     def test_succeeds_on_second_attempt_after_first_rejection(self):
         session = MagicMock()
         call_count = {"n": 0}
 
-        def fake_do_login(**kwargs):
+        def fake_login(**kwargs):
             call_count["n"] += 1
             return call_count["n"] >= 2
+
+        auth = MagicMock(spec=DrcomAuthenticator)
+        auth.login.side_effect = fake_login
 
         with (
             patch("guardian.get_active_ip", return_value="10.0.0.1"),
             patch("guardian.get_active_mac", return_value="aabbccddeeff"),
-            patch("guardian._do_login", side_effect=fake_do_login),
             patch("guardian.time.sleep"),
         ):
-            result = login_with_retry(session)
+            result = login_with_retry(session, auth)
 
         assert result is True
         assert call_count["n"] == 2
@@ -245,35 +253,49 @@ class TestLoginWithRetry:
         session = MagicMock()
         call_count = {"n": 0}
 
-        def fake_do_login(**kwargs):
+        def fake_login(**kwargs):
             call_count["n"] += 1
             if call_count["n"] == 1:
                 raise requests.ConnectionError("network error")
             return True
 
+        auth = MagicMock(spec=DrcomAuthenticator)
+        auth.login.side_effect = fake_login
+
         with (
             patch("guardian.get_active_ip", return_value="10.0.0.1"),
             patch("guardian.get_active_mac", return_value="aabbccddeeff"),
-            patch("guardian._do_login", side_effect=fake_do_login),
             patch("guardian.time.sleep"),
         ):
-            assert login_with_retry(session) is True
+            assert login_with_retry(session, auth) is True
 
     def test_backoff_sleep_called_between_retries(self):
         session = MagicMock()
+        auth = self._make_authenticator(return_value=False)
         sleep_calls = []
 
         with (
             patch("guardian.get_active_ip", return_value="10.0.0.1"),
             patch("guardian.get_active_mac", return_value="aabbccddeeff"),
-            patch("guardian._do_login", return_value=False),
             patch("guardian.time.sleep", side_effect=lambda t: sleep_calls.append(t)),
         ):
-            login_with_retry(session)
+            login_with_retry(session, auth)
 
         # sleep is called between retries, not after the last one
         import config as cfg
         assert len(sleep_calls) == cfg.LOGIN_RETRY_COUNT - 1
+
+    def test_uses_config_authenticator_when_none_provided(self):
+        """When no authenticator is passed, one is created from config."""
+        session = MagicMock()
+        mock_auth = self._make_authenticator(return_value=True)
+        with (
+            patch("guardian.get_active_ip", return_value="10.0.0.1"),
+            patch("guardian.get_active_mac", return_value="aabbccddeeff"),
+            patch("guardian.auth_plugins.get_authenticator", return_value=mock_auth),
+        ):
+            assert login_with_retry(session) is True
+        mock_auth.login.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -339,12 +361,20 @@ class TestInstanceLock:
 # ---------------------------------------------------------------------------
 
 class TestGuardianTarget:
+    def _make_auth(self, return_value: bool = True) -> MagicMock:
+        auth = MagicMock(spec=DrcomAuthenticator)
+        auth.login.return_value = return_value
+        return auth
+
     def test_loop_skipped_when_stop_event_already_set(self):
         state = AppState()
         stop_event = threading.Event()
         stop_event.set()  # signal before entry
 
-        with patch("guardian.setup_logging"):
+        with (
+            patch("guardian.setup_logging"),
+            patch("guardian.auth_plugins.get_authenticator", return_value=self._make_auth()),
+        ):
             guardian_target(state, stop_event)
 
         # Loop body never executed; state stays at default
@@ -362,6 +392,7 @@ class TestGuardianTarget:
             patch("guardian.get_active_ip", return_value="10.0.0.1"),
             patch("guardian.check_connectivity", side_effect=fake_check),
             patch("guardian.setup_logging"),
+            patch("guardian.auth_plugins.get_authenticator", return_value=self._make_auth()),
         ):
             guardian_target(state, stop_event)
 
@@ -380,6 +411,7 @@ class TestGuardianTarget:
             patch("guardian.check_connectivity", side_effect=fake_check),
             patch("guardian.login_with_retry", return_value=False),
             patch("guardian.setup_logging"),
+            patch("guardian.auth_plugins.get_authenticator", return_value=self._make_auth()),
         ):
             guardian_target(state, stop_event)
 
@@ -402,6 +434,7 @@ class TestGuardianTarget:
             patch("guardian.check_connectivity", side_effect=fake_check),
             patch("guardian.login_with_retry", return_value=True),
             patch("guardian.setup_logging"),
+            patch("guardian.auth_plugins.get_authenticator", return_value=self._make_auth()),
         ):
             guardian_target(state, stop_event)
 
@@ -420,6 +453,7 @@ class TestGuardianTarget:
             patch("guardian.check_connectivity", side_effect=fake_check),
             patch("guardian.login_with_retry", return_value=False),
             patch("guardian.setup_logging"),
+            patch("guardian.auth_plugins.get_authenticator", return_value=self._make_auth()),
         ):
             guardian_target(state, stop_event)
 
@@ -436,6 +470,7 @@ class TestGuardianTarget:
         with (
             patch("guardian.get_active_ip", side_effect=exploding_ip),
             patch("guardian.setup_logging"),
+            patch("guardian.auth_plugins.get_authenticator", return_value=self._make_auth()),
         ):
             guardian_target(state, stop_event)
 
@@ -444,7 +479,6 @@ class TestGuardianTarget:
     def test_ip_change_logged_on_new_ip(self):
         state = AppState()
         stop_event = threading.Event()
-        logged_ips = []
 
         original_get_ip = iter(["10.0.0.1", "10.0.0.2"])
 
@@ -467,5 +501,41 @@ class TestGuardianTarget:
             patch("guardian.get_active_ip", side_effect=fake_get_ip),
             patch("guardian.check_connectivity", side_effect=fake_check),
             patch("guardian.setup_logging"),
+            patch("guardian.auth_plugins.get_authenticator", return_value=self._make_auth()),
         ):
             guardian_target(state, stop_event)
+
+    def test_authenticator_recreated_on_config_changed(self):
+        """When config_changed is set, guardian recreates the authenticator."""
+        state = AppState()
+        stop_event = threading.Event()
+        state.config_changed.set()  # simulate a config save before the loop
+
+        auth1 = self._make_auth()
+        auth2 = self._make_auth()
+        get_auth_calls = {"n": 0}
+
+        def fake_get_authenticator():
+            get_auth_calls["n"] += 1
+            return auth1 if get_auth_calls["n"] == 1 else auth2
+
+        call_count = {"n": 0}
+
+        def fake_check(session):
+            call_count["n"] += 1
+            if call_count["n"] >= 2:
+                stop_event.set()
+            return True
+
+        with (
+            patch("guardian.get_active_ip", return_value="10.0.0.1"),
+            patch("guardian.check_connectivity", side_effect=fake_check),
+            patch("guardian.setup_logging"),
+            patch("guardian.auth_plugins.get_authenticator", side_effect=fake_get_authenticator),
+            patch("guardian._cfg.reload_config"),
+        ):
+            guardian_target(state, stop_event)
+
+        # get_authenticator should have been called at least twice (once at
+        # startup and once after config_changed was detected).
+        assert get_auth_calls["n"] >= 2

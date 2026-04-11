@@ -64,3 +64,36 @@ backoff_base_seconds = 1
 [logging]
 ; 日志文件路径（相对路径基于可执行文件所在目录）
 log_file = service.log
+
+
+[auth]
+; 认证协议类型，支持以下值：
+;   drcom        – Dr.COM / Ruijie iPortal 校园网门户（默认，适用大多数高校）
+;   generic_post – 通用 HTTP 表单认证（支持 GET/POST，参数由 [auth_params] 配置）
+auth_type = drcom
+
+; 以下选项仅在 auth_type = generic_post 时生效 ──────────────────────────────
+
+; HTTP 请求方法：GET 或 POST（默认 POST）
+; auth_method = POST
+
+; 登录成功的响应体关键词（逗号分隔，不区分大小写）
+; auth_success_markers = success,登录成功
+
+
+[auth_params]
+; 仅在 auth_type = generic_post 时使用。
+; 此节的所有键值对将作为表单参数发送到 [network] login_url。
+; 参数值支持以下占位符（运行时自动替换）：
+;   {ip}           – 当前活跃网卡的 IPv4 地址
+;   {mac}          – 当前活跃网卡的 MAC 地址（12 位小写十六进制，无分隔符）
+;   {user_account} – [credentials] user_account 的值
+;   {user_password}– [credentials] user_password 的值
+;
+; 示例（iNode / 深信服 Portal 等）：
+; username   = {user_account}
+; password   = {user_password}
+; user_ip    = {ip}
+; user_mac   = {mac}
+; ac_id      = 1
+

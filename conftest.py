@@ -50,6 +50,11 @@ backoff_base_seconds = 1
 
 [logging]
 log_file = service.log
+
+[auth]
+auth_type = drcom
+auth_method = POST
+auth_success_markers = success,登录成功
 """
 
 # Only write if a real config.ini is absent so we never clobber user credentials.
