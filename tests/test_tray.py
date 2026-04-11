@@ -437,3 +437,86 @@ class TestTrayControllerNotifications:
 
         # Must not raise
         controller._send_notification("AutoNetGuard", "test")
+
+
+# ---------------------------------------------------------------------------
+# AppState – wakeup_event
+# ---------------------------------------------------------------------------
+
+class TestAppStateWakeupEvent:
+    def test_wakeup_event_is_threading_event(self):
+        state = AppState()
+        assert isinstance(state.wakeup_event, threading.Event)
+
+    def test_wakeup_event_initially_not_set(self):
+        state = AppState()
+        assert not state.wakeup_event.is_set()
+
+    def test_wakeup_event_can_be_set_and_cleared(self):
+        state = AppState()
+        state.wakeup_event.set()
+        assert state.wakeup_event.is_set()
+        state.wakeup_event.clear()
+        assert not state.wakeup_event.is_set()
+
+
+# ---------------------------------------------------------------------------
+# TrayController – profile switching
+# ---------------------------------------------------------------------------
+
+class TestTrayControllerProfileSwitch:
+    def test_on_switch_profile_sets_config_changed_and_wakeup_events(self, monkeypatch):
+        import config as _cfg
+
+        monkeypatch.setattr(_cfg, "switch_profile", lambda name: None)
+        monkeypatch.setattr(_cfg, "list_profiles", lambda: ["school", "company"])
+        monkeypatch.setattr(_cfg, "get_active_profile", lambda: "school")
+
+        state = AppState()
+        stop_event = threading.Event()
+        controller = TrayController(state, stop_event)
+
+        controller._on_switch_profile("company")
+
+        assert state.config_changed.is_set()
+        assert state.wakeup_event.is_set()
+
+    def test_on_switch_profile_refreshes_menu_when_icon_present(self, monkeypatch):
+        import config as _cfg
+
+        monkeypatch.setattr(_cfg, "switch_profile", lambda name: None)
+        monkeypatch.setattr(_cfg, "list_profiles", lambda: ["school", "company"])
+        monkeypatch.setattr(_cfg, "get_active_profile", lambda: "company")
+
+        state = AppState()
+        stop_event = threading.Event()
+        controller = TrayController(state, stop_event)
+        mock_icon = MagicMock()
+        controller._icon = mock_icon
+
+        controller._on_switch_profile("company")
+
+        mock_icon.update_menu.assert_called()
+
+    def test_build_profile_submenu_with_no_profiles_returns_disabled_item(self, monkeypatch):
+        import config as _cfg
+
+        monkeypatch.setattr(_cfg, "list_profiles", lambda: [])
+        monkeypatch.setattr(_cfg, "get_active_profile", lambda: "")
+
+        state = AppState()
+        controller = TrayController(state, threading.Event())
+        submenu = controller._build_profile_submenu()
+        # Should return a Menu object (not raise)
+        assert submenu is not None
+
+    def test_build_profile_submenu_with_profiles_returns_menu(self, monkeypatch):
+        import config as _cfg
+
+        monkeypatch.setattr(_cfg, "list_profiles", lambda: ["school", "company"])
+        monkeypatch.setattr(_cfg, "get_active_profile", lambda: "school")
+
+        state = AppState()
+        controller = TrayController(state, threading.Event())
+        submenu = controller._build_profile_submenu()
+        assert submenu is not None

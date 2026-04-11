@@ -134,20 +134,34 @@ def _maybe_encrypt_credentials(parser: configparser.ConfigParser,
                                 config_path: Path) -> None:
     """Encrypt any plaintext credential fields and rewrite *config_path*.
 
+    Handles both the legacy ``[credentials]`` section and any
+    ``[profile:<name>]`` sections that contain ``user_account`` /
+    ``user_password`` in plaintext.
+
     This function is a no-op when all credential fields are already encrypted
     or when *config_path* does not exist.
     """
     if not config_path.exists():
         return
-    if not parser.has_section("credentials"):
-        return
 
     changed = False
-    for field in _ENCRYPTED_FIELDS:
-        value = parser.get("credentials", field, fallback=None)
-        if value and value.strip() and not _is_encrypted(value):
-            parser.set("credentials", field, _encrypt_value(value))
-            changed = True
+
+    # Legacy [credentials] section
+    if parser.has_section("credentials"):
+        for field in _ENCRYPTED_FIELDS:
+            value = parser.get("credentials", field, fallback=None)
+            if value and value.strip() and not _is_encrypted(value):
+                parser.set("credentials", field, _encrypt_value(value))
+                changed = True
+
+    # Each [profile:<name>] section
+    for section in parser.sections():
+        if section.lower().startswith("profile:"):
+            for field in _ENCRYPTED_FIELDS:
+                value = parser.get(section, field, fallback=None)
+                if value and value.strip() and not _is_encrypted(value):
+                    parser.set(section, field, _encrypt_value(value))
+                    changed = True
 
     if changed:
         with config_path.open("w", encoding="utf-8") as fh:
@@ -202,23 +216,119 @@ def _parse_bool(value: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# [credentials]
+# Multi-profile helpers
 # ---------------------------------------------------------------------------
 
-USER_ACCOUNT: str = _get("credentials", "user_account")
-USER_PASSWORD: str = _get("credentials", "user_password")
+def _get_profile_or_fallback(
+    key: str,
+    legacy_section: str,
+    fallback: str | None = None,
+) -> str:
+    """Return *key* from the active profile section, falling back to *legacy_section*.
+
+    Resolution order:
+    1. ``[profile:<active_profile>]`` section (if an active profile is set and
+       the section contains *key*).
+    2. *legacy_section* (e.g. ``"credentials"`` or ``"network"``), read via
+       the usual :func:`_get` helper.
+    3. *fallback* value (passed through to :func:`_get`).
+
+    Encrypted values (``ENC:`` prefix) are decrypted transparently at every
+    step.
+    """
+    profile = _parser.get("global", "active_profile", fallback="").strip()
+    if profile:
+        profile_section = f"profile:{profile}"
+        if _parser.has_section(profile_section):
+            raw = _parser.get(profile_section, key, fallback=None)
+            if raw is not None:
+                if _is_encrypted(raw):
+                    try:
+                        return _decrypt_value(raw)
+                    except Exception as exc:
+                        raise KeyError(
+                            f"Failed to decrypt [{profile_section}] {key} in "
+                            f"{_CONFIG_PATH}. The config.ini was likely created "
+                            "on a different machine. Please re-enter your "
+                            "plaintext credentials and restart the application."
+                        ) from exc
+                return raw
+    return _get(legacy_section, key, fallback=fallback)
+
+
+def list_profiles() -> list[str]:
+    """Return a sorted list of all configured profile names.
+
+    Scans ``_parser`` for sections whose name starts with ``profile:`` and
+    returns the suffix (the profile name) for each one.  Returns an empty
+    list when no profiles are configured.
+    """
+    return sorted(
+        section[len("profile:"):]
+        for section in _parser.sections()
+        if section.lower().startswith("profile:")
+    )
+
+
+def get_active_profile() -> str:
+    """Return the name of the currently active profile, or ``''`` if none."""
+    return _parser.get("global", "active_profile", fallback="").strip()
+
+
+def switch_profile(name: str) -> None:
+    """Persist *name* as the active profile in ``config.ini`` and reload globals.
+
+    Steps:
+    1. Read the current ``config.ini``.
+    2. Set ``[global] active_profile = <name>``.
+    3. Write the updated file.
+    4. Call :func:`reload_config` so that all module-level constants reflect
+       the new profile immediately.
+
+    This function is intended to be called from the system-tray profile-switch
+    menu.  After it returns the caller should set ``state.config_changed`` and
+    ``state.wakeup_event`` so that the guardian thread applies the new
+    configuration and reconnects immediately.
+    """
+    parser = configparser.ConfigParser()
+    parser.read(_CONFIG_PATH, encoding="utf-8")
+
+    if not parser.has_section("global"):
+        parser.add_section("global")
+    parser.set("global", "active_profile", name)
+
+    with _CONFIG_PATH.open("w", encoding="utf-8") as fh:
+        parser.write(fh)
+
+    reload_config()
+
 
 # ---------------------------------------------------------------------------
-# [network]
+# [credentials]  /  active profile credentials
 # ---------------------------------------------------------------------------
 
-GATEWAY_IP: str = _get("network", "gateway_ip", fallback="10.10.10.2")
+USER_ACCOUNT: str = _get_profile_or_fallback("user_account", "credentials")
+USER_PASSWORD: str = _get_profile_or_fallback("user_password", "credentials")
+
+# ---------------------------------------------------------------------------
+# [network]  /  active profile network settings
+# ---------------------------------------------------------------------------
+
+GATEWAY_IP: str = _get_profile_or_fallback("gateway_ip", "network", fallback="10.10.10.2")
 GATEWAY_HOST: str = f"http://{GATEWAY_IP}"
-LOGIN_URL: str = _get("network", "login_url", fallback=f"http://{GATEWAY_IP}:801/eportal/portal/login")
-REFERER: str = _get("network", "referer", fallback=f"http://{GATEWAY_IP}/")
+LOGIN_URL: str = _get_profile_or_fallback(
+    "login_url", "network", fallback=f"http://{GATEWAY_IP}:801/eportal/portal/login"
+)
+REFERER: str = _get_profile_or_fallback("referer", "network", fallback=f"http://{GATEWAY_IP}/")
 
-WLAN_AC_IP: str = _get("network", "wlan_ac_ip", fallback="10.0.253.2")
-WLAN_AC_NAME: str = _get("network", "wlan_ac_name", fallback="WS6812")
+WLAN_AC_IP: str = _get_profile_or_fallback("wlan_ac_ip", "network", fallback="10.0.253.2")
+WLAN_AC_NAME: str = _get_profile_or_fallback("wlan_ac_name", "network", fallback="WS6812")
+
+# ---------------------------------------------------------------------------
+# [global]  – active profile name
+# ---------------------------------------------------------------------------
+
+ACTIVE_PROFILE: str = get_active_profile()
 
 # ---------------------------------------------------------------------------
 # [connectivity]
@@ -312,6 +422,9 @@ def save_config(
 ) -> None:
     """将新配置写入 config.ini 并同步更新模块全局变量（热加载）。
 
+    当存在活跃 Profile 时，凭据和网关设置写入对应的 ``[profile:<name>]`` 节；
+    否则写入传统的 ``[credentials]`` / ``[network]`` 节。
+
     凭据以明文形式写入文件，随后由 ``_maybe_encrypt_credentials`` 加密并回写，
     确保与已有的加密逻辑完全兼容。
 
@@ -330,15 +443,27 @@ def save_config(
         if not parser.has_section(section):
             parser.add_section(section)
 
-    _ensure("credentials")
-    # 存明文；_maybe_encrypt_credentials 随后将其加密并回写
-    parser.set("credentials", "user_account", user_account)
-    parser.set("credentials", "user_password", user_password)
+    # 凭据和网络设置：优先写入活跃 Profile，否则写入传统节
+    active_profile = parser.get("global", "active_profile", fallback="").strip()
+    if active_profile:
+        profile_section = f"profile:{active_profile}"
+        _ensure(profile_section)
+        # 存明文；_maybe_encrypt_credentials 随后将其加密并回写
+        parser.set(profile_section, "user_account", user_account)
+        parser.set(profile_section, "user_password", user_password)
+        parser.set(profile_section, "gateway_ip", gateway_ip)
+        parser.set(profile_section, "login_url", login_url)
+        parser.set(profile_section, "referer", f"http://{gateway_ip}/")
+    else:
+        _ensure("credentials")
+        # 存明文；_maybe_encrypt_credentials 随后将其加密并回写
+        parser.set("credentials", "user_account", user_account)
+        parser.set("credentials", "user_password", user_password)
 
-    _ensure("network")
-    parser.set("network", "gateway_ip", gateway_ip)
-    parser.set("network", "login_url", login_url)
-    parser.set("network", "referer", f"http://{gateway_ip}/")
+        _ensure("network")
+        parser.set("network", "gateway_ip", gateway_ip)
+        parser.set("network", "login_url", login_url)
+        parser.set("network", "referer", f"http://{gateway_ip}/")
 
     _ensure("timing")
     parser.set("timing", "check_interval_seconds", str(check_interval_seconds))
@@ -367,9 +492,13 @@ def save_config(
 def reload_config() -> None:
     """从 config.ini 重新加载全部配置项并更新模块全局变量。
 
+    当 ``[global] active_profile`` 指向某个 Profile 时，凭据和网络设置从对应的
+    ``[profile:<name>]`` 节读取；否则从传统 ``[credentials]`` / ``[network]`` 节读取。
+
     可在守护进程重启前调用，确保新线程拿到最新值。
     """
     global _parser  # noqa: PLW0603
+    global ACTIVE_PROFILE  # noqa: PLW0603
     global USER_ACCOUNT, USER_PASSWORD, GATEWAY_IP, GATEWAY_HOST  # noqa: PLW0603
     global LOGIN_URL, REFERER, WLAN_AC_IP, WLAN_AC_NAME  # noqa: PLW0603
     global CONNECTIVITY_URL, REQUEST_TIMEOUT_SECONDS, CHECK_INTERVAL_SECONDS  # noqa: PLW0603
@@ -381,14 +510,16 @@ def reload_config() -> None:
     _parser.read(_CONFIG_PATH, encoding="utf-8")
     _maybe_encrypt_credentials(_parser, _CONFIG_PATH)
 
-    USER_ACCOUNT = _get("credentials", "user_account")
-    USER_PASSWORD = _get("credentials", "user_password")
-    GATEWAY_IP = _get("network", "gateway_ip", fallback=GATEWAY_IP)
+    ACTIVE_PROFILE = get_active_profile()
+
+    USER_ACCOUNT = _get_profile_or_fallback("user_account", "credentials")
+    USER_PASSWORD = _get_profile_or_fallback("user_password", "credentials")
+    GATEWAY_IP = _get_profile_or_fallback("gateway_ip", "network", fallback=GATEWAY_IP)
     GATEWAY_HOST = f"http://{GATEWAY_IP}"
-    LOGIN_URL = _get("network", "login_url", fallback=LOGIN_URL)
-    REFERER = _get("network", "referer", fallback=REFERER)
-    WLAN_AC_IP = _get("network", "wlan_ac_ip", fallback=WLAN_AC_IP)
-    WLAN_AC_NAME = _get("network", "wlan_ac_name", fallback=WLAN_AC_NAME)
+    LOGIN_URL = _get_profile_or_fallback("login_url", "network", fallback=LOGIN_URL)
+    REFERER = _get_profile_or_fallback("referer", "network", fallback=REFERER)
+    WLAN_AC_IP = _get_profile_or_fallback("wlan_ac_ip", "network", fallback=WLAN_AC_IP)
+    WLAN_AC_NAME = _get_profile_or_fallback("wlan_ac_name", "network", fallback=WLAN_AC_NAME)
     CONNECTIVITY_URL = _get("connectivity", "check_url", fallback=CONNECTIVITY_URL)
     REQUEST_TIMEOUT_SECONDS = int(
         _get("timing", "request_timeout_seconds", fallback=str(REQUEST_TIMEOUT_SECONDS))

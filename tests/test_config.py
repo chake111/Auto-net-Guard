@@ -265,3 +265,234 @@ class TestEnableNotifications:
     def test_default_is_true_from_test_config(self):
         # conftest.py writes [ui] enable_notifications = true
         assert cfg.ENABLE_NOTIFICATIONS is True
+
+
+# ---------------------------------------------------------------------------
+# Multi-profile: list_profiles / get_active_profile
+# ---------------------------------------------------------------------------
+
+class TestListProfiles:
+    def test_empty_when_no_profiles_in_config(self):
+        # conftest.py test config has no [profile:xxx] sections
+        assert cfg.list_profiles() == []
+
+    def test_returns_profile_names_from_parser(self, tmp_path, monkeypatch):
+        ini = tmp_path / "config.ini"
+        ini.write_text(
+            "[profile:school]\nuser_account = a\nuser_password = b\n"
+            "[profile:company]\nuser_account = c\nuser_password = d\n",
+            encoding="utf-8",
+        )
+        parser = configparser.ConfigParser()
+        parser.read(ini, encoding="utf-8")
+        monkeypatch.setattr(cfg, "_parser", parser)
+        profiles = cfg.list_profiles()
+        assert set(profiles) == {"school", "company"}
+        # Must be sorted
+        assert profiles == sorted(profiles)
+
+    def test_returns_single_profile(self, tmp_path, monkeypatch):
+        ini = tmp_path / "config.ini"
+        ini.write_text("[profile:lab]\nuser_account = x\nuser_password = y\n", encoding="utf-8")
+        parser = configparser.ConfigParser()
+        parser.read(ini, encoding="utf-8")
+        monkeypatch.setattr(cfg, "_parser", parser)
+        assert cfg.list_profiles() == ["lab"]
+
+
+class TestGetActiveProfile:
+    def test_returns_empty_string_when_no_global_section(self):
+        # conftest test config has no [global] section
+        assert cfg.get_active_profile() == ""
+
+    def test_returns_profile_name_when_set(self, tmp_path, monkeypatch):
+        ini = tmp_path / "config.ini"
+        ini.write_text("[global]\nactive_profile = school\n", encoding="utf-8")
+        parser = configparser.ConfigParser()
+        parser.read(ini, encoding="utf-8")
+        monkeypatch.setattr(cfg, "_parser", parser)
+        assert cfg.get_active_profile() == "school"
+
+    def test_strips_whitespace_from_profile_name(self, tmp_path, monkeypatch):
+        ini = tmp_path / "config.ini"
+        ini.write_text("[global]\nactive_profile =  lab  \n", encoding="utf-8")
+        parser = configparser.ConfigParser()
+        parser.read(ini, encoding="utf-8")
+        monkeypatch.setattr(cfg, "_parser", parser)
+        assert cfg.get_active_profile() == "lab"
+
+
+# ---------------------------------------------------------------------------
+# Multi-profile: _get_profile_or_fallback
+# ---------------------------------------------------------------------------
+
+class TestGetProfileOrFallback:
+    def test_falls_back_to_legacy_section_when_no_active_profile(self, tmp_path, monkeypatch):
+        ini = tmp_path / "config.ini"
+        ini.write_text(
+            "[credentials]\nuser_account = legacy_user\nuser_password = legacy_pass\n",
+            encoding="utf-8",
+        )
+        parser = configparser.ConfigParser()
+        parser.read(ini, encoding="utf-8")
+        monkeypatch.setattr(cfg, "_parser", parser)
+        monkeypatch.setattr(cfg, "_CONFIG_PATH", ini)
+        assert cfg._get_profile_or_fallback("user_account", "credentials") == "legacy_user"
+
+    def test_reads_from_active_profile_section(self, tmp_path, monkeypatch):
+        ini = tmp_path / "config.ini"
+        ini.write_text(
+            "[global]\nactive_profile = school\n"
+            "[profile:school]\nuser_account = school_user\nuser_password = school_pass\n"
+            "[credentials]\nuser_account = legacy_user\nuser_password = legacy_pass\n",
+            encoding="utf-8",
+        )
+        parser = configparser.ConfigParser()
+        parser.read(ini, encoding="utf-8")
+        monkeypatch.setattr(cfg, "_parser", parser)
+        monkeypatch.setattr(cfg, "_CONFIG_PATH", ini)
+        assert cfg._get_profile_or_fallback("user_account", "credentials") == "school_user"
+
+    def test_profile_missing_key_falls_back_to_legacy(self, tmp_path, monkeypatch):
+        ini = tmp_path / "config.ini"
+        ini.write_text(
+            "[global]\nactive_profile = school\n"
+            "[profile:school]\nuser_account = school_user\n"
+            "[credentials]\nuser_account = legacy_user\nuser_password = legacy_pass\n",
+            encoding="utf-8",
+        )
+        parser = configparser.ConfigParser()
+        parser.read(ini, encoding="utf-8")
+        monkeypatch.setattr(cfg, "_parser", parser)
+        monkeypatch.setattr(cfg, "_CONFIG_PATH", ini)
+        # user_password is missing from [profile:school] → fall back to [credentials]
+        assert cfg._get_profile_or_fallback("user_password", "credentials") == "legacy_pass"
+
+    def test_encrypted_value_in_profile_is_decrypted(self, tmp_path, monkeypatch):
+        encrypted = cfg._encrypt_value("secret_pass")
+        ini = tmp_path / "config.ini"
+        ini.write_text(
+            f"[global]\nactive_profile = school\n"
+            f"[profile:school]\nuser_account = alice\nuser_password = {encrypted}\n",
+            encoding="utf-8",
+        )
+        parser = configparser.ConfigParser()
+        parser.read(ini, encoding="utf-8")
+        monkeypatch.setattr(cfg, "_parser", parser)
+        monkeypatch.setattr(cfg, "_CONFIG_PATH", ini)
+        assert cfg._get_profile_or_fallback("user_password", "credentials") == "secret_pass"
+
+    def test_fallback_value_returned_for_missing_key_and_section(self, tmp_path, monkeypatch):
+        ini = tmp_path / "config.ini"
+        ini.write_text("", encoding="utf-8")
+        parser = configparser.ConfigParser()
+        parser.read(ini, encoding="utf-8")
+        monkeypatch.setattr(cfg, "_parser", parser)
+        monkeypatch.setattr(cfg, "_CONFIG_PATH", ini)
+        assert cfg._get_profile_or_fallback("gateway_ip", "network", fallback="1.2.3.4") == "1.2.3.4"
+
+
+# ---------------------------------------------------------------------------
+# Multi-profile: _maybe_encrypt_credentials – profile sections
+# ---------------------------------------------------------------------------
+
+class TestMaybeEncryptCredentialsProfiles:
+    def test_encrypts_plaintext_in_profile_section(self, tmp_path):
+        ini = tmp_path / "config.ini"
+        ini.write_text(
+            "[profile:school]\nuser_account = alice\nuser_password = secret\n",
+            encoding="utf-8",
+        )
+        parser = configparser.ConfigParser()
+        parser.read(ini, encoding="utf-8")
+        cfg._maybe_encrypt_credentials(parser, ini)
+
+        assert cfg._is_encrypted(parser.get("profile:school", "user_account"))
+        assert cfg._is_encrypted(parser.get("profile:school", "user_password"))
+
+    def test_encrypts_multiple_profile_sections(self, tmp_path):
+        ini = tmp_path / "config.ini"
+        ini.write_text(
+            "[profile:school]\nuser_account = alice\nuser_password = pass1\n"
+            "[profile:company]\nuser_account = bob\nuser_password = pass2\n",
+            encoding="utf-8",
+        )
+        parser = configparser.ConfigParser()
+        parser.read(ini, encoding="utf-8")
+        cfg._maybe_encrypt_credentials(parser, ini)
+
+        for section in ("profile:school", "profile:company"):
+            assert cfg._is_encrypted(parser.get(section, "user_account"))
+            assert cfg._is_encrypted(parser.get(section, "user_password"))
+
+    def test_already_encrypted_profile_credentials_not_rewritten(self, tmp_path):
+        enc_account = cfg._encrypt_value("alice")
+        enc_password = cfg._encrypt_value("secret")
+        original = (
+            f"[profile:school]\nuser_account = {enc_account}\nuser_password = {enc_password}\n"
+        )
+        ini = tmp_path / "config.ini"
+        ini.write_text(original, encoding="utf-8")
+        parser = configparser.ConfigParser()
+        parser.read(ini, encoding="utf-8")
+        cfg._maybe_encrypt_credentials(parser, ini)
+        assert ini.read_text(encoding="utf-8") == original
+
+
+# ---------------------------------------------------------------------------
+# Multi-profile: switch_profile
+# ---------------------------------------------------------------------------
+
+class TestSwitchProfile:
+    def test_switch_profile_updates_active_profile_in_file(self, tmp_path, monkeypatch):
+        ini = tmp_path / "config.ini"
+        ini.write_text(
+            "[global]\nactive_profile = school\n"
+            "[profile:school]\nuser_account = a\nuser_password = b\n"
+            "[profile:company]\nuser_account = c\nuser_password = d\n"
+            "[credentials]\nuser_account = a\nuser_password = b\n"
+            "[network]\ngateway_ip = 10.10.10.2\nlogin_url = http://10.10.10.2:801/eportal/portal/login\n"
+            "referer = http://10.10.10.2/\nwlan_ac_ip = 10.0.253.2\nwlan_ac_name = WS6812\n"
+            "[connectivity]\ncheck_url = http://www.google.cn/generate_204\n"
+            "[timing]\nrequest_timeout_seconds = 8\ncheck_interval_seconds = 30\n"
+            "login_retry_count = 3\nbackoff_base_seconds = 1\n"
+            "[logging]\nlog_file = service.log\n"
+            "[ui]\nenable_notifications = true\n"
+            "[auth]\nauth_type = drcom\nauth_method = POST\n"
+            "auth_success_markers = success,登录成功\n"
+            "[srun]\nacid = 1\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(cfg, "_CONFIG_PATH", ini)
+
+        cfg.switch_profile("company")
+
+        parser = configparser.ConfigParser()
+        parser.read(ini, encoding="utf-8")
+        assert parser.get("global", "active_profile") == "company"
+
+    def test_switch_profile_reloads_globals(self, tmp_path, monkeypatch):
+        ini = tmp_path / "config.ini"
+        ini.write_text(
+            "[global]\nactive_profile = school\n"
+            "[profile:school]\nuser_account = school_user\nuser_password = school_pass\n"
+            "[profile:company]\nuser_account = company_user\nuser_password = company_pass\n"
+            "[credentials]\nuser_account = school_user\nuser_password = school_pass\n"
+            "[network]\ngateway_ip = 10.10.10.2\nlogin_url = http://10.10.10.2:801/eportal/portal/login\n"
+            "referer = http://10.10.10.2/\nwlan_ac_ip = 10.0.253.2\nwlan_ac_name = WS6812\n"
+            "[connectivity]\ncheck_url = http://www.google.cn/generate_204\n"
+            "[timing]\nrequest_timeout_seconds = 8\ncheck_interval_seconds = 30\n"
+            "login_retry_count = 3\nbackoff_base_seconds = 1\n"
+            "[logging]\nlog_file = service.log\n"
+            "[ui]\nenable_notifications = true\n"
+            "[auth]\nauth_type = drcom\nauth_method = POST\n"
+            "auth_success_markers = success,登录成功\n"
+            "[srun]\nacid = 1\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(cfg, "_CONFIG_PATH", ini)
+
+        cfg.switch_profile("company")
+
+        assert cfg.ACTIVE_PROFILE == "company"
+        assert cfg.USER_ACCOUNT == "company_user"

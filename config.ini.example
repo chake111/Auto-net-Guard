@@ -13,7 +13,73 @@
 ;
 ; 如果将 config.ini 复制到其他机器，由于密钥不同将无法解密；此时只需将
 ; user_account 和 user_password 恢复为明文，重新启动程序即可自动完成加密。
+;
+; ── 多网络环境（Profile）说明 ─────────────────────────────────────────────
+; 通过 [global] active_profile 指定当前生效的网络环境（Profile）。
+; 每个 Profile 用 [profile:<名称>] 节定义，包含该环境专属的账号、密码和网关。
+; 在系统托盘右键菜单的"切换网络环境"子菜单中可一键热切换，无需重启程序。
+;
+; 若不使用多 Profile 功能，保留传统 [credentials] / [network] 节即可，
+; 删除 [global] 节或将 active_profile 留空，程序会自动回退到传统模式。
 
+
+; ── 全局配置 ──────────────────────────────────────────────────────────────
+[global]
+; 当前生效的网络环境名称，必须与某个 [profile:<名称>] 节对应。
+; 留空则回退到传统 [credentials] / [network] 节。
+active_profile = school
+
+
+; ── 网络环境 Profile 示例 ─────────────────────────────────────────────────
+; 每个 Profile 可独立配置账号、密码和网关参数。
+
+[profile:school]
+; 校园网登录账号（通常为学号@运营商，例如 2331020130239@unicom）
+user_account = YOUR_STUDENT_ID@unicom
+
+; 校园网登录密码
+user_password = YOUR_PASSWORD
+
+; 认证网关 IP
+gateway_ip = 10.10.10.2
+
+; 登录接口完整 URL
+login_url = http://10.10.10.2:801/eportal/portal/login
+
+; HTTP Referer 头
+referer = http://10.10.10.2/
+
+; 无线控制器 IP（从抓包的登录请求中获取）
+wlan_ac_ip = 10.0.253.2
+
+; 无线控制器名称（从抓包的登录请求中获取）
+wlan_ac_name = WS6812
+
+
+[profile:company]
+; 公司网络账号
+user_account = YOUR_EMPLOYEE_ID@company
+
+; 公司网络密码
+user_password = YOUR_COMPANY_PASSWORD
+
+; 公司网关 IP
+gateway_ip = 192.168.1.1
+
+; 公司登录接口 URL
+login_url = http://192.168.1.1:801/eportal/portal/login
+
+; HTTP Referer 头
+referer = http://192.168.1.1/
+
+; 无线控制器 IP
+wlan_ac_ip = 192.168.1.254
+
+; 无线控制器名称
+wlan_ac_name = CompanyAP
+
+
+; ── 传统凭据节（无 Profile 时使用） ──────────────────────────────────────
 [credentials]
 ; 校园网登录账号（通常为学号@运营商，例如 2331020130239@unicom）
 user_account = YOUR_STUDENT_ID@unicom
