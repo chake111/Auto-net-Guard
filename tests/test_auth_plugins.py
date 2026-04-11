@@ -12,7 +12,16 @@ from auth_plugins import (
     BaseAuthenticator,
     DrcomAuthenticator,
     GenericPostAuthenticator,
+    SrunAuthenticator,
     get_authenticator,
+)
+from auth_plugins.srun import (
+    _encode_info,
+    _hmac_md5_password,
+    _parse_jsonp,
+    _sha1_chksum,
+    _srun_b64encode,
+    _xencode,
 )
 
 
@@ -320,3 +329,301 @@ class TestGetAuthenticator:
     def test_registry_contains_expected_types(self):
         assert "drcom" in auth_plugins._REGISTRY
         assert "generic_post" in auth_plugins._REGISTRY
+        assert "srun" in auth_plugins._REGISTRY
+
+    def test_srun_auth_type_returns_srun_instance(self):
+        with patch("config.AUTH_TYPE", "srun"):
+            auth = get_authenticator()
+        assert isinstance(auth, SrunAuthenticator)
+
+
+# ---------------------------------------------------------------------------
+# BaseAuthenticator – check_status (default implementation)
+# ---------------------------------------------------------------------------
+
+class TestBaseAuthenticatorCheckStatus:
+    def _make_session(self, status_code: int) -> MagicMock:
+        session = MagicMock()
+        response = MagicMock()
+        response.status_code = status_code
+        response.raise_for_status = MagicMock()
+        session.get.return_value = response
+        return session
+
+    def _make_minimal_auth(self) -> BaseAuthenticator:
+        class Minimal(BaseAuthenticator):
+            def login(self, session, ip, mac):
+                return True
+
+        return Minimal()
+
+    def test_returns_true_on_http_204(self):
+        auth = self._make_minimal_auth()
+        session = self._make_session(204)
+        assert auth.check_status(session) is True
+
+    def test_returns_false_on_non_204(self):
+        auth = self._make_minimal_auth()
+        for code in (200, 301, 302, 404, 503):
+            session = self._make_session(code)
+            assert auth.check_status(session) is False
+
+    def test_returns_false_on_request_exception(self):
+        auth = self._make_minimal_auth()
+        session = MagicMock()
+        session.get.side_effect = requests.ConnectionError("timeout")
+        assert auth.check_status(session) is False
+
+    def test_drcom_inherits_default_check_status(self):
+        auth = DrcomAuthenticator()
+        session = self._make_session(204)
+        assert auth.check_status(session) is True
+
+    def test_generic_post_inherits_default_check_status(self):
+        auth = GenericPostAuthenticator()
+        session = self._make_session(204)
+        assert auth.check_status(session) is True
+
+
+# ---------------------------------------------------------------------------
+# SrunAuthenticator – encoding helpers
+# ---------------------------------------------------------------------------
+
+
+class TestSrunEncodingHelpers:
+    def test_xencode_empty_returns_empty_bytes(self):
+        assert _xencode("", "key") == b""
+
+    def test_xencode_returns_bytes(self):
+        result = _xencode("hello", "mykey")
+        assert isinstance(result, bytes)
+
+    def test_xencode_same_input_same_output(self):
+        assert _xencode("test message", "secret") == _xencode("test message", "secret")
+
+    def test_xencode_different_keys_different_output(self):
+        a = _xencode("same message", "key_a")
+        b = _xencode("same message", "key_b")
+        assert a != b
+
+    def test_srun_b64encode_returns_str(self):
+        result = _srun_b64encode(b"hello world")
+        assert isinstance(result, str)
+
+    def test_srun_b64encode_length_matches_standard_b64(self):
+        data = b"test data 12345"
+        import base64
+
+        std = base64.b64encode(data).decode()
+        srun = _srun_b64encode(data)
+        assert len(srun) == len(std)
+
+    def test_srun_b64encode_uses_custom_alphabet(self):
+        # Standard base64 of b'\x00' is 'AAAA=='; Srun maps A→L so starts with 'L'
+        result = _srun_b64encode(b"\x00\x00\x00")
+        assert result.startswith("L"), f"Expected 'L' prefix, got {result!r}"
+
+    def test_hmac_md5_password_format(self):
+        result = _hmac_md5_password("password", "challenge")
+        assert result.startswith("{MD5}")
+        hex_part = result[5:]
+        assert len(hex_part) == 32
+        assert all(c in "0123456789abcdef" for c in hex_part)
+
+    def test_hmac_md5_password_differs_by_challenge(self):
+        a = _hmac_md5_password("pw", "challenge_a")
+        b = _hmac_md5_password("pw", "challenge_b")
+        assert a != b
+
+    def test_encode_info_has_srbx1_prefix(self):
+        result = _encode_info("user", "pass", "1.2.3.4", "1", "challenge_token")
+        assert result.startswith("{SRBX1}")
+
+    def test_encode_info_is_deterministic(self):
+        a = _encode_info("user", "pass", "1.2.3.4", "1", "tok")
+        b = _encode_info("user", "pass", "1.2.3.4", "1", "tok")
+        assert a == b
+
+    def test_encode_info_varies_with_challenge(self):
+        a = _encode_info("user", "pass", "1.2.3.4", "1", "token_a")
+        b = _encode_info("user", "pass", "1.2.3.4", "1", "token_b")
+        assert a != b
+
+    def test_sha1_chksum_returns_40_hex_chars(self):
+        result = _sha1_chksum("ch", "user", "{MD5}abc", "1", "1.2.3.4", "200", "1", "{SRBX1}xyz")
+        assert len(result) == 40
+        assert all(c in "0123456789abcdef" for c in result)
+
+    def test_sha1_chksum_varies_with_challenge(self):
+        a = _sha1_chksum("ch_a", "user", "{MD5}abc", "1", "1.2.3.4", "200", "1", "{SRBX1}xyz")
+        b = _sha1_chksum("ch_b", "user", "{MD5}abc", "1", "1.2.3.4", "200", "1", "{SRBX1}xyz")
+        assert a != b
+
+    def test_parse_jsonp_extracts_dict(self):
+        jsonp = 'jQuery({"res":"ok","challenge":"abc123"})'
+        result = _parse_jsonp(jsonp)
+        assert result == {"res": "ok", "challenge": "abc123"}
+
+    def test_parse_jsonp_raises_on_invalid(self):
+        import pytest
+
+        with pytest.raises(ValueError):
+            _parse_jsonp("not jsonp at all")
+
+
+# ---------------------------------------------------------------------------
+# SrunAuthenticator – login
+# ---------------------------------------------------------------------------
+
+
+class TestSrunAuthenticatorLogin:
+    def _make_session(
+        self,
+        challenge_text: str,
+        login_text: str,
+        challenge_status: int = 200,
+        login_status: int = 200,
+    ) -> MagicMock:
+        """Build a mock session whose first GET returns the challenge response
+        and whose second GET returns the login response."""
+        session = MagicMock()
+        ch_resp = MagicMock()
+        ch_resp.status_code = challenge_status
+        ch_resp.text = challenge_text
+        ch_resp.raise_for_status = MagicMock()
+
+        login_resp = MagicMock()
+        login_resp.status_code = login_status
+        login_resp.text = login_text
+        login_resp.raise_for_status = MagicMock()
+
+        session.get.side_effect = [ch_resp, login_resp]
+        return session
+
+    def _challenge_jsonp(self, challenge: str = "test_challenge_token") -> str:
+        return f'jQuery({{"res":"ok","challenge":"{challenge}","client_ip":"10.0.0.1"}})'
+
+    def test_login_success_res_ok(self):
+        session = self._make_session(
+            self._challenge_jsonp(),
+            'jQuery({"res":"ok","suc_msg":"login_ok"})',
+        )
+        auth = SrunAuthenticator()
+        assert auth.login(session, ip="10.0.0.1", mac="aabbccddeeff") is True
+
+    def test_login_success_login_ok_marker(self):
+        session = self._make_session(
+            self._challenge_jsonp(),
+            'jQuery({"res":"login_ok"})',
+        )
+        assert SrunAuthenticator().login(session, ip="10.0.0.1", mac="aabbccddeeff") is True
+
+    def test_login_success_already_online(self):
+        session = self._make_session(
+            self._challenge_jsonp(),
+            'jQuery({"res":"ip_already_online_error"})',
+        )
+        assert SrunAuthenticator().login(session, ip="10.0.0.1", mac="aabbccddeeff") is True
+
+    def test_login_failure_returns_false(self):
+        session = self._make_session(
+            self._challenge_jsonp(),
+            'jQuery({"res":"login_error","error":"wrong password"})',
+        )
+        assert SrunAuthenticator().login(session, ip="10.0.0.1", mac="aabbccddeeff") is False
+
+    def test_challenge_failure_raises_value_error(self):
+        session = MagicMock()
+        error_resp = MagicMock()
+        error_resp.text = 'jQuery({"res":"fail","error":"bad request"})'
+        error_resp.raise_for_status = MagicMock()
+        session.get.return_value = error_resp
+        with pytest.raises(ValueError, match="challenge"):
+            SrunAuthenticator().login(session, ip="10.0.0.1", mac="aabbccddeeff")
+
+    def test_http_error_on_challenge_propagates(self):
+        session = MagicMock()
+        resp = MagicMock()
+        resp.raise_for_status.side_effect = requests.HTTPError("503")
+        session.get.return_value = resp
+        with pytest.raises(requests.HTTPError):
+            SrunAuthenticator().login(session, ip="10.0.0.1", mac="aabbccddeeff")
+
+    def test_http_error_on_login_propagates(self):
+        session = MagicMock()
+        ch_resp = MagicMock()
+        ch_resp.text = self._challenge_jsonp()
+        ch_resp.raise_for_status = MagicMock()
+        login_resp = MagicMock()
+        login_resp.raise_for_status.side_effect = requests.HTTPError("403")
+        session.get.side_effect = [ch_resp, login_resp]
+        with pytest.raises(requests.HTTPError):
+            SrunAuthenticator().login(session, ip="10.0.0.1", mac="aabbccddeeff")
+
+    def test_two_get_requests_made_per_login(self):
+        session = self._make_session(
+            self._challenge_jsonp(),
+            'jQuery({"res":"ok"})',
+        )
+        SrunAuthenticator().login(session, ip="10.0.0.1", mac="aabbccddeeff")
+        assert session.get.call_count == 2
+
+    def test_challenge_url_called_first(self):
+        session = self._make_session(
+            self._challenge_jsonp(),
+            'jQuery({"res":"ok"})',
+        )
+        SrunAuthenticator().login(session, ip="10.0.0.1", mac="aabbccddeeff")
+        first_call_url = session.get.call_args_list[0][0][0]
+        assert "get_challenge" in first_call_url
+
+    def test_login_url_called_second(self):
+        session = self._make_session(
+            self._challenge_jsonp(),
+            'jQuery({"res":"ok"})',
+        )
+        SrunAuthenticator().login(session, ip="10.0.0.1", mac="aabbccddeeff")
+        second_call_url = session.get.call_args_list[1][0][0]
+        assert "srun_portal" in second_call_url
+
+
+# ---------------------------------------------------------------------------
+# SrunAuthenticator – check_status
+# ---------------------------------------------------------------------------
+
+class TestSrunAuthenticatorCheckStatus:
+    def _make_session_with_info_response(self, info_text: str) -> MagicMock:
+        session = MagicMock()
+        resp = MagicMock()
+        resp.text = info_text
+        resp.status_code = 200
+        resp.raise_for_status = MagicMock()
+        session.get.return_value = resp
+        return session
+
+    def test_online_when_portal_returns_ok(self):
+        session = self._make_session_with_info_response(
+            'jQuery({"res":"ok","online_ip":"10.0.0.1"})'
+        )
+        auth = SrunAuthenticator()
+        with patch.object(auth, "_get_active_ip", return_value="10.0.0.1"):
+            result = auth.check_status(session)
+        assert result is True
+
+    def test_offline_when_portal_returns_non_ok(self):
+        session = self._make_session_with_info_response(
+            'jQuery({"res":"not_online_error"})'
+        )
+        auth = SrunAuthenticator()
+        with patch.object(auth, "_get_active_ip", return_value="10.0.0.1"):
+            result = auth.check_status(session)
+        assert result is False
+
+    def test_falls_back_on_request_exception(self):
+        session = MagicMock()
+        session.get.side_effect = requests.ConnectionError("timeout")
+        auth = SrunAuthenticator()
+        with patch.object(auth, "_get_active_ip", return_value="10.0.0.1"):
+            # Should not raise – falls back to default connectivity check
+            result = auth.check_status(session)
+        assert isinstance(result, bool)

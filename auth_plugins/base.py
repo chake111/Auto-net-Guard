@@ -1,7 +1,8 @@
 """Base authenticator interface (Strategy Pattern).
 
 All concrete authenticators must inherit from ``BaseAuthenticator`` and
-implement the :meth:`login` method.
+implement the :meth:`login` method.  They may also override
+:meth:`check_status` to provide a portal-specific online-state query.
 """
 
 from __future__ import annotations
@@ -45,3 +46,36 @@ class BaseAuthenticator(ABC):
             explicitly rejected the attempt.  Raises on network / HTTP errors
             so that the caller can handle retries.
         """
+
+    def check_status(self, session: requests.Session) -> bool:
+        """Return whether the device is currently authenticated on the network.
+
+        The default implementation issues an HTTP GET to the connectivity
+        check URL (``[connectivity] check_url``) and treats an HTTP 204
+        response as "online / authenticated".  Sub-classes may override this
+        with a portal-specific query (e.g. querying the portal's info
+        endpoint) for a more accurate result.
+
+        Parameters
+        ----------
+        session:
+            Shared ``requests.Session`` carrying any existing session cookies.
+
+        Returns
+        -------
+        bool
+            ``True`` if the device appears to be authenticated and online;
+            ``False`` otherwise.  Never raises – connectivity failures are
+            caught and returned as ``False``.
+        """
+        import config as _cfg  # noqa: PLC0415  (deferred to support hot-reload)
+
+        try:
+            response = session.get(
+                _cfg.CONNECTIVITY_URL,
+                timeout=_cfg.REQUEST_TIMEOUT_SECONDS,
+                allow_redirects=False,
+            )
+            return response.status_code == 204
+        except requests.RequestException:
+            return False

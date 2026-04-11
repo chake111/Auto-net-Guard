@@ -266,6 +266,13 @@ AUTH_SUCCESS_MARKERS: str = _get(
 )
 
 # ---------------------------------------------------------------------------
+# [srun]  (used by SrunAuthenticator)
+# ---------------------------------------------------------------------------
+
+# AC-ID value shown on the Srun portal login page (varies per deployment).
+SRUN_ACID: str = _get("srun", "acid", fallback="1")
+
+# ---------------------------------------------------------------------------
 # [auth_params]  (used by GenericPostAuthenticator)
 # ---------------------------------------------------------------------------
 
@@ -367,7 +374,7 @@ def reload_config() -> None:
     global LOGIN_URL, REFERER, WLAN_AC_IP, WLAN_AC_NAME  # noqa: PLW0603
     global CONNECTIVITY_URL, REQUEST_TIMEOUT_SECONDS, CHECK_INTERVAL_SECONDS  # noqa: PLW0603
     global LOGIN_RETRY_COUNT, BACKOFF_BASE_SECONDS, LOG_FILE  # noqa: PLW0603
-    global AUTH_TYPE, AUTH_METHOD, AUTH_SUCCESS_MARKERS, AUTH_PARAMS  # noqa: PLW0603
+    global AUTH_TYPE, AUTH_METHOD, AUTH_SUCCESS_MARKERS, AUTH_PARAMS, SRUN_ACID  # noqa: PLW0603
     global ENABLE_NOTIFICATIONS  # noqa: PLW0603
 
     _parser = configparser.ConfigParser()
@@ -402,4 +409,5 @@ def reload_config() -> None:
         "auth", "auth_success_markers", fallback=AUTH_SUCCESS_MARKERS
     )
     AUTH_PARAMS = _load_auth_params(_parser)
+    SRUN_ACID = _get("srun", "acid", fallback=SRUN_ACID)
     ENABLE_NOTIFICATIONS = _parse_bool(_get("ui", "enable_notifications", fallback="true"))

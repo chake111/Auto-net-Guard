@@ -6,17 +6,19 @@ runtime without modifying the guardian loop.
 
 Public API
 ----------
-* :class:`BaseAuthenticator` – abstract interface every strategy must implement
-* :class:`DrcomAuthenticator` – Dr.COM / Ruijie iPortal campus-network login
+* :class:`BaseAuthenticator`      – abstract interface every strategy must implement
+* :class:`DrcomAuthenticator`     – Dr.COM / Ruijie iPortal campus-network login
 * :class:`GenericPostAuthenticator` – config-driven HTTP form authenticator
-* :func:`get_authenticator` – factory that instantiates the strategy selected
+* :class:`SrunAuthenticator`      – Srun / 深澜 challenge–response portal
+* :func:`get_authenticator`       – factory that instantiates the strategy selected
   in ``config.ini`` (key ``[auth] auth_type``)
 
 Adding a new protocol
 ---------------------
 1. Create a new module inside ``auth_plugins/`` (e.g. ``my_proto.py``).
 2. Define a class that inherits from :class:`BaseAuthenticator` and implements
-   :meth:`~BaseAuthenticator.login`.
+   :meth:`~BaseAuthenticator.login`.  Optionally override
+   :meth:`~BaseAuthenticator.check_status` for portal-specific status queries.
 3. Register it in the ``_REGISTRY`` dict below.
 4. Set ``auth_type = my_proto`` in ``config.ini``.
 
@@ -28,11 +30,13 @@ from __future__ import annotations
 from .base import BaseAuthenticator
 from .drcom import DrcomAuthenticator
 from .generic_post import GenericPostAuthenticator
+from .srun import SrunAuthenticator
 
 __all__ = [
     "BaseAuthenticator",
     "DrcomAuthenticator",
     "GenericPostAuthenticator",
+    "SrunAuthenticator",
     "get_authenticator",
 ]
 
@@ -41,6 +45,7 @@ __all__ = [
 _REGISTRY: dict[str, type[BaseAuthenticator]] = {
     "drcom": DrcomAuthenticator,
     "generic_post": GenericPostAuthenticator,
+    "srun": SrunAuthenticator,
 }
 
 
