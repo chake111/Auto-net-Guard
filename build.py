@@ -40,6 +40,13 @@ def build() -> None:
         # Ensure hidden imports for pystray Windows backend and Pillow
         "--hidden-import", "pystray._win32",
         "--hidden-import", "PIL._tkinter_finder",
+        # cryptography library backend (used for config encryption)
+        "--hidden-import", "cryptography",
+        "--hidden-import", "cryptography.fernet",
+        "--hidden-import", "cryptography.hazmat.primitives.kdf.pbkdf2",
+        "--hidden-import", "cryptography.hazmat.backends",
+        "--hidden-import", "cryptography.hazmat.backends.openssl",
+        "--hidden-import", "cryptography.hazmat.backends.openssl.backend",
         str(entry),
     ]
 
