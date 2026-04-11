@@ -26,6 +26,9 @@ from pathlib import Path
 
 import requests
 
+import auth_plugins
+from auth_plugins import BaseAuthenticator
+
 try:
     import config as _cfg
     # 验证必填凭据存在（KeyError 说明 config.ini 缺失或配置不完整）
@@ -176,23 +179,14 @@ def get_active_mac() -> str:
 
 
 def _build_login_params(ip: str, mac: str) -> dict[str, str]:
-    return {
-        "callback": "dr1003",
-        "login_method": "1",
-        "user_account": _cfg.USER_ACCOUNT,
-        "user_password": _cfg.USER_PASSWORD,
-        "wlan_user_ip": ip,
-        "wlan_user_ipv6": "",
-        "wlan_user_mac": mac,
-        "wlan_vlan_id": "0",
-        "wlan_ac_ip": _cfg.WLAN_AC_IP,
-        "wlan_ac_name": _cfg.WLAN_AC_NAME,
-        "authex_enable": "",
-        "jsVersion": "4.2.2",
-        "terminal_type": "1",
-        "lang": "zh-cn",
-        "v": str(int(time.time()) % 10000),
-    }
+    """Build Dr.COM portal query parameters.
+
+    .. deprecated::
+        This helper exists for backward compatibility with tests.  New code
+        should use :class:`auth_plugins.DrcomAuthenticator` directly.
+    """
+    from auth_plugins.drcom import DrcomAuthenticator  # noqa: PLC0415
+    return DrcomAuthenticator()._build_params(ip=ip, mac=mac)
 
 
 def check_connectivity(session: requests.Session) -> bool:
@@ -209,39 +203,46 @@ def check_connectivity(session: requests.Session) -> bool:
 
 
 def _do_login(session: requests.Session, ip: str, mac: str) -> bool:
-    params = _build_login_params(ip=ip, mac=mac)
-    response = session.get(
-        _cfg.LOGIN_URL,
-        params=params,
-        headers={"Referer": _cfg.REFERER},
-        timeout=_cfg.REQUEST_TIMEOUT_SECONDS,
-    )
-    response.raise_for_status()
+    """Perform a single Dr.COM login attempt.
 
-    text = response.text.lower()
-    success_markers = [
-        "success",
-        "portal_success",
-        '"result":"1"',
-        '"result":1',
-        "登录成功",
-    ]
-    return any(marker in text for marker in success_markers)
+    .. deprecated::
+        This helper exists for backward compatibility with tests.  New code
+        should use :class:`auth_plugins.DrcomAuthenticator` directly via
+        :func:`login_with_retry`.
+    """
+    from auth_plugins.drcom import DrcomAuthenticator  # noqa: PLC0415
+    return DrcomAuthenticator().login(session=session, ip=ip, mac=mac)
 
 
-def login_with_retry(session: requests.Session) -> bool:
+def login_with_retry(
+    session: requests.Session,
+    authenticator: BaseAuthenticator | None = None,
+) -> bool:
+    """Attempt to authenticate, retrying up to ``config.LOGIN_RETRY_COUNT`` times.
+
+    Parameters
+    ----------
+    session:
+        Shared ``requests.Session`` (carries cookies / headers).
+    authenticator:
+        Authentication strategy to use.  When ``None`` the strategy
+        configured in ``config.ini`` (``[auth] auth_type``) is instantiated
+        automatically via :func:`auth_plugins.get_authenticator`.
+    """
+    _authenticator = authenticator if authenticator is not None else auth_plugins.get_authenticator()
     for attempt in range(1, _cfg.LOGIN_RETRY_COUNT + 1):
         try:
             ip = get_active_ip()
             mac = get_active_mac()
             LOGGER.info(
-                "Login attempt %s/%s | ip=%s | mac=%s",
+                "Login attempt %s/%s | ip=%s | mac=%s | auth=%s",
                 attempt,
                 _cfg.LOGIN_RETRY_COUNT,
                 ip,
                 mac,
+                type(_authenticator).__name__,
             )
-            if _do_login(session=session, ip=ip, mac=mac):
+            if _authenticator.login(session=session, ip=ip, mac=mac):
                 LOGGER.info("Login success on attempt %s.", attempt)
                 return True
             LOGGER.warning("Login rejected on attempt %s.", attempt)
@@ -287,9 +288,24 @@ def guardian_target(state: AppState, stop_event: threading.Event) -> None:
         }
     )
 
+    # Instantiate the authenticator strategy selected in config.ini.
+    authenticator = auth_plugins.get_authenticator()
+    LOGGER.info("Using authenticator: %s", type(authenticator).__name__)
+
     previous_ip = ""
 
     while not stop_event.is_set():
+        # Re-create the authenticator when the user saves new settings so that
+        # a changed auth_type takes effect without a full restart.
+        if state.config_changed.is_set():
+            state.config_changed.clear()
+            _cfg.reload_config()
+            authenticator = auth_plugins.get_authenticator()
+            LOGGER.info(
+                "Config reloaded; using authenticator: %s",
+                type(authenticator).__name__,
+            )
+
         try:
             current_ip = get_active_ip()
             if current_ip != previous_ip:
@@ -306,7 +322,7 @@ def guardian_target(state: AppState, stop_event: threading.Event) -> None:
                 state.status = NetStatus.LOGGING_IN
                 state.increment_disconnect()
 
-                if login_with_retry(session):
+                if login_with_retry(session, authenticator):
                     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     state.last_login_time = now
                     if check_connectivity(session):

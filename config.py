@@ -233,6 +233,49 @@ BACKOFF_BASE_SECONDS: int = int(_get("timing", "backoff_base_seconds", fallback=
 LOG_FILE: str = _get("logging", "log_file", fallback="service.log")
 
 # ---------------------------------------------------------------------------
+# [auth]
+# ---------------------------------------------------------------------------
+
+AUTH_TYPE: str = _get("auth", "auth_type", fallback="drcom")
+
+# HTTP method used by GenericPostAuthenticator ("GET" or "POST").
+AUTH_METHOD: str = _get("auth", "auth_method", fallback="POST")
+
+# Comma-separated substrings that indicate a successful login response.
+# Used by GenericPostAuthenticator; DrcomAuthenticator has its own built-in
+# markers and ignores this setting.
+AUTH_SUCCESS_MARKERS: str = _get(
+    "auth",
+    "auth_success_markers",
+    fallback="success,登录成功",
+)
+
+# ---------------------------------------------------------------------------
+# [auth_params]  (used by GenericPostAuthenticator)
+# ---------------------------------------------------------------------------
+
+def _load_auth_params(parser: configparser.ConfigParser) -> dict[str, str]:
+    """Return the ``[auth_params]`` section as a plain ``dict[str, str]``.
+
+    Values that carry the ``ENC:`` prefix are decrypted transparently.
+    Returns an empty dict when the section is absent.
+    """
+    if not parser.has_section("auth_params"):
+        return {}
+    result: dict[str, str] = {}
+    for key, value in parser.items("auth_params"):
+        if _is_encrypted(value):
+            try:
+                value = _decrypt_value(value)
+            except Exception:  # pylint: disable=broad-except
+                pass
+        result[key] = value
+    return result
+
+
+AUTH_PARAMS: dict[str, str] = _load_auth_params(_parser)
+
+# ---------------------------------------------------------------------------
 # Runtime config update helpers (used by the GUI settings window)
 # ---------------------------------------------------------------------------
 
@@ -304,6 +347,7 @@ def reload_config() -> None:
     global LOGIN_URL, REFERER, WLAN_AC_IP, WLAN_AC_NAME  # noqa: PLW0603
     global CONNECTIVITY_URL, REQUEST_TIMEOUT_SECONDS, CHECK_INTERVAL_SECONDS  # noqa: PLW0603
     global LOGIN_RETRY_COUNT, BACKOFF_BASE_SECONDS, LOG_FILE  # noqa: PLW0603
+    global AUTH_TYPE, AUTH_METHOD, AUTH_SUCCESS_MARKERS, AUTH_PARAMS  # noqa: PLW0603
 
     _parser = configparser.ConfigParser()
     _parser.read(_CONFIG_PATH, encoding="utf-8")
@@ -331,3 +375,9 @@ def reload_config() -> None:
         _get("timing", "backoff_base_seconds", fallback=str(BACKOFF_BASE_SECONDS))
     )
     LOG_FILE = _get("logging", "log_file", fallback=LOG_FILE)
+    AUTH_TYPE = _get("auth", "auth_type", fallback=AUTH_TYPE)
+    AUTH_METHOD = _get("auth", "auth_method", fallback=AUTH_METHOD)
+    AUTH_SUCCESS_MARKERS = _get(
+        "auth", "auth_success_markers", fallback=AUTH_SUCCESS_MARKERS
+    )
+    AUTH_PARAMS = _load_auth_params(_parser)
