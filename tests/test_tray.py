@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 from PIL import Image
 
-from tray import AppState, NetStatus, TrayController, _make_icon, _ICON_SIZE
+from tray import AppState, NetStatus, TrayController, _make_icon, _ICON_SIZE, _get_notify_message
 
 
 # ---------------------------------------------------------------------------
@@ -281,3 +281,159 @@ class TestTrayController:
         controller._on_quit(mock_icon, MagicMock())
         assert stop_event.is_set()
         mock_icon.stop.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _get_notify_message
+# ---------------------------------------------------------------------------
+
+class TestGetNotifyMessage:
+    def test_online_to_logging_in_returns_message(self):
+        result = _get_notify_message(NetStatus.ONLINE, NetStatus.LOGGING_IN)
+        assert result is not None
+        title, message = result
+        assert "断网" in message
+
+    def test_logging_in_to_online_returns_message(self):
+        result = _get_notify_message(NetStatus.LOGGING_IN, NetStatus.ONLINE)
+        assert result is not None
+        title, message = result
+        assert "恢复" in message or "成功" in message
+
+    def test_logging_in_to_offline_returns_message(self):
+        result = _get_notify_message(NetStatus.LOGGING_IN, NetStatus.OFFLINE)
+        assert result is not None
+        title, message = result
+        assert "失败" in message
+
+    def test_unknown_transitions_return_none(self):
+        assert _get_notify_message(NetStatus.UNKNOWN, NetStatus.ONLINE) is None
+        assert _get_notify_message(NetStatus.ONLINE, NetStatus.OFFLINE) is None
+        assert _get_notify_message(NetStatus.OFFLINE, NetStatus.LOGGING_IN) is None
+
+    def test_same_status_returns_none(self):
+        for status in NetStatus:
+            assert _get_notify_message(status, status) is None
+
+    def test_result_is_two_strings(self):
+        result = _get_notify_message(NetStatus.ONLINE, NetStatus.LOGGING_IN)
+        assert result is not None
+        title, message = result
+        assert isinstance(title, str) and isinstance(message, str)
+
+
+# ---------------------------------------------------------------------------
+# AppState – on_notify callback
+# ---------------------------------------------------------------------------
+
+class TestAppStateOnNotify:
+    def test_on_notify_fires_on_noteworthy_transition(self):
+        state = AppState()
+        state.status = NetStatus.ONLINE
+        notify_cb = MagicMock()
+        state.on_notify = notify_cb
+        state.status = NetStatus.LOGGING_IN
+        notify_cb.assert_called_once()
+        title, message = notify_cb.call_args[0]
+        assert isinstance(title, str) and isinstance(message, str)
+
+    def test_on_notify_not_fired_for_silent_transition(self):
+        state = AppState()
+        state.status = NetStatus.UNKNOWN
+        notify_cb = MagicMock()
+        state.on_notify = notify_cb
+        state.status = NetStatus.ONLINE  # UNKNOWN→ONLINE is not noteworthy
+        notify_cb.assert_not_called()
+
+    def test_on_notify_not_fired_when_status_unchanged(self):
+        state = AppState()
+        state.status = NetStatus.ONLINE
+        notify_cb = MagicMock()
+        state.on_notify = notify_cb
+        state.status = NetStatus.ONLINE  # no change
+        notify_cb.assert_not_called()
+
+    def test_full_disconnect_reconnect_sequence(self):
+        state = AppState()
+        state.status = NetStatus.ONLINE
+        notifications: list[tuple[str, str]] = []
+        state.on_notify = lambda t, m: notifications.append((t, m))
+
+        state.status = NetStatus.LOGGING_IN   # disconnect detected
+        state.status = NetStatus.ONLINE       # reconnected
+
+        assert len(notifications) == 2
+        assert "断网" in notifications[0][1]
+        assert "恢复" in notifications[1][1] or "成功" in notifications[1][1]
+
+    def test_full_disconnect_fail_sequence(self):
+        state = AppState()
+        state.status = NetStatus.ONLINE
+        notifications: list[tuple[str, str]] = []
+        state.on_notify = lambda t, m: notifications.append((t, m))
+
+        state.status = NetStatus.LOGGING_IN   # disconnect detected
+        state.status = NetStatus.OFFLINE      # all retries failed
+
+        assert len(notifications) == 2
+        assert "断网" in notifications[0][1]
+        assert "失败" in notifications[1][1]
+
+
+# ---------------------------------------------------------------------------
+# TrayController – notification wiring
+# ---------------------------------------------------------------------------
+
+class TestTrayControllerNotifications:
+    def test_on_notify_wired_to_send_notification(self):
+        state = AppState()
+        stop_event = threading.Event()
+        TrayController(state, stop_event)
+        assert callable(state.on_notify)
+
+    def test_send_notification_is_noop_before_run(self):
+        state = AppState()
+        stop_event = threading.Event()
+        controller = TrayController(state, stop_event)
+        # _icon is None; _send_notification must not raise
+        controller._send_notification("AutoNetGuard", "test message")
+
+    def test_send_notification_calls_icon_notify_when_enabled(self, monkeypatch):
+        import config as _cfg
+        monkeypatch.setattr(_cfg, "ENABLE_NOTIFICATIONS", True)
+
+        state = AppState()
+        stop_event = threading.Event()
+        controller = TrayController(state, stop_event)
+        mock_icon = MagicMock()
+        controller._icon = mock_icon
+
+        controller._send_notification("AutoNetGuard", "网络已恢复")
+        mock_icon.notify.assert_called_once_with("网络已恢复", "AutoNetGuard")
+
+    def test_send_notification_skipped_when_disabled(self, monkeypatch):
+        import config as _cfg
+        monkeypatch.setattr(_cfg, "ENABLE_NOTIFICATIONS", False)
+
+        state = AppState()
+        stop_event = threading.Event()
+        controller = TrayController(state, stop_event)
+        mock_icon = MagicMock()
+        controller._icon = mock_icon
+
+        controller._send_notification("AutoNetGuard", "网络已恢复")
+        mock_icon.notify.assert_not_called()
+
+    def test_send_notification_swallows_exceptions(self, monkeypatch):
+        import config as _cfg
+        monkeypatch.setattr(_cfg, "ENABLE_NOTIFICATIONS", True)
+
+        state = AppState()
+        stop_event = threading.Event()
+        controller = TrayController(state, stop_event)
+        mock_icon = MagicMock()
+        mock_icon.notify.side_effect = RuntimeError("platform error")
+        controller._icon = mock_icon
+
+        # Must not raise
+        controller._send_notification("AutoNetGuard", "test")

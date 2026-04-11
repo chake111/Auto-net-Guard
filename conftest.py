@@ -51,6 +51,9 @@ backoff_base_seconds = 1
 [logging]
 log_file = service.log
 
+[ui]
+enable_notifications = true
+
 [auth]
 auth_type = drcom
 auth_method = POST

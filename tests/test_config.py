@@ -252,3 +252,16 @@ class TestModuleConstants:
     def test_log_file_is_string(self):
         assert isinstance(cfg.LOG_FILE, str)
         assert len(cfg.LOG_FILE) > 0
+
+
+# ---------------------------------------------------------------------------
+# ENABLE_NOTIFICATIONS constant
+# ---------------------------------------------------------------------------
+
+class TestEnableNotifications:
+    def test_is_bool(self):
+        assert isinstance(cfg.ENABLE_NOTIFICATIONS, bool)
+
+    def test_default_is_true_from_test_config(self):
+        # conftest.py writes [ui] enable_notifications = true
+        assert cfg.ENABLE_NOTIFICATIONS is True

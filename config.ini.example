@@ -66,6 +66,11 @@ backoff_base_seconds = 1
 log_file = service.log
 
 
+[ui]
+; 是否在网络状态发生实质性变化时弹出系统通知（true / false）
+enable_notifications = true
+
+
 [auth]
 ; 认证协议类型，支持以下值：
 ;   drcom        – Dr.COM / Ruijie iPortal 校园网门户（默认，适用大多数高校）

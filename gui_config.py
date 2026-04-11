@@ -45,6 +45,7 @@ class ConfigWindow:
         self._var_gateway: tk.StringVar
         self._var_login_url: tk.StringVar
         self._var_interval: tk.StringVar
+        self._var_notifications: tk.BooleanVar
 
     # ------------------------------------------------------------------ #
     # 公开入口                                                              #
@@ -79,6 +80,7 @@ class ConfigWindow:
         self._var_gateway = tk.StringVar()
         self._var_login_url = tk.StringVar()
         self._var_interval = tk.StringVar()
+        self._var_notifications = tk.BooleanVar(value=True)
 
     # ------------------------------------------------------------------ #
     # 内部：UI 布局                                                         #
@@ -131,9 +133,16 @@ class ConfigWindow:
             row=4, column=1, sticky="w", **pad
         )
 
+        # ── 系统弹窗通知 ──────────────────────────────────────────────────
+        tk.Checkbutton(
+            root,
+            text="开启系统弹窗通知",
+            variable=self._var_notifications,
+        ).grid(row=5, column=1, sticky="w", **pad)
+
         # ── 按钮区域 ─────────────────────────────────────────────────────
         btn_frame = tk.Frame(root)
-        btn_frame.grid(row=5, column=0, columnspan=2, pady=12)
+        btn_frame.grid(row=6, column=0, columnspan=2, pady=12)
 
         tk.Button(
             btn_frame,
@@ -166,6 +175,7 @@ class ConfigWindow:
         self._var_gateway.set(_cfg.GATEWAY_IP)
         self._var_login_url.set(_cfg.LOGIN_URL)
         self._var_interval.set(str(_cfg.CHECK_INTERVAL_SECONDS))
+        self._var_notifications.set(_cfg.ENABLE_NOTIFICATIONS)
 
     # ------------------------------------------------------------------ #
     # 内部：保存逻辑                                                         #
@@ -185,6 +195,7 @@ class ConfigWindow:
         gateway = self._var_gateway.get().strip()
         login_url = self._var_login_url.get().strip()
         interval_str = self._var_interval.get().strip()
+        enable_notifications = self._var_notifications.get()
 
         # ── 基本校验 ────────────────────────────────────────────────────
         if not account or not password or not gateway:
@@ -225,6 +236,7 @@ class ConfigWindow:
                 gateway_ip=gateway,
                 login_url=login_url,
                 check_interval_seconds=interval,
+                enable_notifications=enable_notifications,
             )
         except Exception as exc:  # pylint: disable=broad-except
             messagebox.showerror("保存失败", str(exc), parent=root)
