@@ -1,10 +1,12 @@
-"""Build AutoNetGuard into a background one-file Windows executable.
+"""Build AutoNetGuard into a background one-file executable.
+
+Supports Windows, macOS, and Linux via platform detection.
 
 Post-build steps
 ----------------
-* Copies ``config.ini.example`` next to the generated EXE so that end-users
-  have a ready-made template to fill in their credentials.
-* Prints a reminder to create ``config.ini`` before running the EXE.
+* Copies ``config.ini.example`` next to the generated binary so that
+  end-users have a ready-made template to fill in their credentials.
+* Prints a platform-appropriate reminder to create ``config.ini``.
 """
 
 from __future__ import annotations
@@ -27,6 +29,18 @@ def build() -> None:
         if not f.exists():
             raise FileNotFoundError(f"Required file not found: {f}")
 
+    is_win = sys.platform == "win32"
+    is_mac = sys.platform == "darwin"
+
+    # Platform-specific pystray backend hidden imports
+    if is_win:
+        pystray_backends = ["pystray._win32"]
+    elif is_mac:
+        pystray_backends = ["pystray._darwin"]
+    else:
+        # Linux: try both GTK and AppIndicator backends
+        pystray_backends = ["pystray._gtk", "pystray._appindicator"]
+
     command = [
         sys.executable,
         "-m",
@@ -34,11 +48,19 @@ def build() -> None:
         "--noconfirm",
         "--clean",
         "--onefile",
-        "--noconsole",
         "--name",
         "AutoNetGuard",
-        # Ensure hidden imports for pystray Windows backend and Pillow
-        "--hidden-import", "pystray._win32",
+    ]
+
+    # Suppress the console window on desktop platforms that support it
+    if is_win or is_mac:
+        command.append("--noconsole")
+
+    # pystray backend(s) for the current platform
+    for backend in pystray_backends:
+        command += ["--hidden-import", backend]
+
+    command += [
         "--hidden-import", "PIL._tkinter_finder",
         # cryptography library backend (used for config encryption)
         "--hidden-import", "cryptography",
@@ -53,19 +75,28 @@ def build() -> None:
     print("Running:", " ".join(command))
     subprocess.run(command, cwd=root, check=True)
 
-    # Copy config template to dist/ so users have it alongside the EXE
+    # Copy config template to dist/ so users have it alongside the binary
     dist_dir = root / "dist"
     dest = dist_dir / "config.ini.example"
     shutil.copy2(example_cfg, dest)
     print(f"Copied config template → {dest}")
 
-    print("\nBuild completed: dist/AutoNetGuard.exe")
+    out_name = "AutoNetGuard.exe" if is_win else "AutoNetGuard"
+    print(f"\nBuild completed: dist/{out_name}")
+
+    if is_win:
+        copy_cmd = "copy config.ini.example config.ini"
+        edit_cmd = "notepad config.ini"
+    else:
+        copy_cmd = "cp config.ini.example config.ini"
+        edit_cmd = "nano config.ini"
+
     print(
-        "\n⚠️  Before running the EXE, copy config.ini.example to config.ini "
+        "\n⚠️  Before running the binary, copy config.ini.example to config.ini "
         "in the same directory and fill in your credentials:\n"
         "    cd dist\n"
-        "    copy config.ini.example config.ini\n"
-        "    notepad config.ini"
+        f"    {copy_cmd}\n"
+        f"    {edit_cmd}"
     )
 
 
