@@ -24,7 +24,8 @@ def build() -> None:
 
     # Verify all required source files exist before starting PyInstaller
     required = [entry, example_cfg,
-                root / "tray.py", root / "autostart.py", root / "config.py"]
+                root / "tray.py", root / "autostart.py", root / "config.py",
+                root / "gui_config.py"]
     for f in required:
         if not f.exists():
             raise FileNotFoundError(f"Required file not found: {f}")
@@ -62,6 +63,9 @@ def build() -> None:
 
     command += [
         "--hidden-import", "PIL._tkinter_finder",
+        # tkinter and its sub-modules (used by gui_config.py settings window)
+        "--hidden-import", "tkinter",
+        "--hidden-import", "tkinter.messagebox",
         # cryptography library backend (used for config encryption)
         "--hidden-import", "cryptography",
         "--hidden-import", "cryptography.fernet",

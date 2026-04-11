@@ -52,6 +52,11 @@ class AppState:
     # Called by the tray whenever it needs to refresh the menu / tooltip
     on_status_change: Callable[[], None] | None = field(default=None, repr=False)
 
+    # GUI 保存配置后设置此事件，通知后台可以感知配置变更（如记录日志、刷新菜单）
+    config_changed: threading.Event = field(
+        default_factory=threading.Event, repr=False
+    )
+
     # ---- status ----
     @property
     def status(self) -> NetStatus:
@@ -148,9 +153,16 @@ def _make_icon(status: NetStatus) -> Image.Image:
 class TrayController:
     """Manages the pystray icon lifecycle."""
 
-    def __init__(self, state: AppState, stop_event: threading.Event) -> None:
+    def __init__(
+        self,
+        state: AppState,
+        stop_event: threading.Event,
+        on_settings_open: Callable[[], None] | None = None,
+    ) -> None:
         self._state = state
         self._stop_event = stop_event
+        # 打开设置窗口的回调（由 run_tray 注入，防止多进程/多线程重入）
+        self._on_settings_open = on_settings_open
         self._icon: pystray.Icon | None = None
 
         # Wire state changes → icon update
@@ -164,6 +176,15 @@ class TrayController:
         # loop picks it up on the next wake.  The guardian itself will update
         # the status back.
         self._state.status = NetStatus.OFFLINE
+
+    def _on_open_settings(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:  # noqa: ARG002
+        """打开图形化配置窗口。
+
+        通过注入的回调在独立守护线程中运行 tkinter 窗口，
+        确保不阻塞 pystray 主线程的事件循环。
+        """
+        if self._on_settings_open:
+            self._on_settings_open()
 
     def _on_toggle_autostart(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:  # noqa: ARG002
         if is_autostart_enabled():
@@ -192,6 +213,7 @@ class TrayController:
             pystray.MenuItem(summary_text, None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("立即重新登录", self._on_login_now),
+            pystray.MenuItem("设置 (Settings)", self._on_open_settings),
             pystray.MenuItem(autostart_label, self._on_toggle_autostart),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("退出 AutoNetGuard", self._on_quit),
@@ -246,8 +268,46 @@ def run_tray(
     )
     guardian_thread.start()
 
+    # ------------------------------------------------------------------
+    # 非阻塞打开设置窗口
+    # ------------------------------------------------------------------
+    # 用锁防止同时打开多个设置窗口（pystray 回调可能在短时间内多次触发）
+    _settings_lock = threading.Lock()
+
+    def _open_settings_in_thread() -> None:
+        """在独立守护线程中运行 tkinter 配置窗口。
+
+        关键并发约束：
+        - pystray 在主线程的事件循环中调用此函数，必须立刻返回。
+        - tkinter 的 mainloop() 是阻塞调用，只能在独立线程中运行。
+        - 使用 _settings_lock 保证同时只有一个设置窗口存在。
+        """
+        if not _settings_lock.acquire(blocking=False):
+            # 设置窗口已在运行，忽略重复点击
+            return
+
+        def _gui_thread_target() -> None:
+            try:
+                from gui_config import ConfigWindow  # noqa: PLC0415
+
+                # on_saved 回调：保存成功后设置 config_changed 事件，
+                # guardian 线程将在下次循环时自动读到新配置值。
+                ConfigWindow(on_saved=lambda: state.config_changed.set()).run()
+            finally:
+                _settings_lock.release()
+
+        threading.Thread(
+            target=_gui_thread_target,
+            name="gui_settings",
+            daemon=True,  # 主进程退出时自动销毁，不阻碍程序关闭
+        ).start()
+
     # Run tray on main thread (blocks until user clicks "退出")
-    tray = TrayController(state=state, stop_event=stop_event)
+    tray = TrayController(
+        state=state,
+        stop_event=stop_event,
+        on_settings_open=_open_settings_in_thread,
+    )
     tray.run()
 
     # Tray has exited – signal guardian to stop and wait briefly
