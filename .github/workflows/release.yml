@@ -52,6 +52,9 @@ jobs:
         run: pip install -r requirements.txt pyinstaller
 
       - name: Build with PyInstaller
+        env:
+          PYTHONUTF8: 1
+          PYTHONIOENCODING: utf-8
         run: python build.py
 
       - name: Determine archive name
