@@ -17,6 +17,22 @@ import sys
 from pathlib import Path
 
 
+def _pyinstaller_python(root: Path) -> str:
+    """Return the Python interpreter that should run PyInstaller.
+
+    Prefer the project-local virtual environment when it exists so builds are
+    reproducible even if the script is launched with a different interpreter.
+    """
+    if sys.platform == "win32":
+        venv_python = root / ".venv" / "Scripts" / "python.exe"
+    else:
+        venv_python = root / ".venv" / "bin" / "python"
+
+    if venv_python.exists():
+        return str(venv_python)
+    return sys.executable
+
+
 def build() -> None:
     root = Path(__file__).resolve().parent
     entry = root / "guardian.py"
@@ -43,7 +59,7 @@ def build() -> None:
         pystray_backends = ["pystray._gtk", "pystray._appindicator"]
 
     command = [
-        sys.executable,
+        _pyinstaller_python(root),
         "-m",
         "PyInstaller",
         "--noconfirm",
