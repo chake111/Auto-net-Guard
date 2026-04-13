@@ -242,6 +242,14 @@ class TestMakeIcon:
         # Different status → different colour → different pixel bytes
         assert online != offline
 
+    def test_statuses_remain_distinct_after_16px_resize(self):
+        resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+        resized = {
+            status: _make_icon(status).resize((16, 16), resample).tobytes()
+            for status in NetStatus
+        }
+        assert len(set(resized.values())) == len(NetStatus)
+
 
 # ---------------------------------------------------------------------------
 # TrayController – basic construction

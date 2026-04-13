@@ -151,29 +151,113 @@ class AppState:
 _ICON_SIZE = 64
 
 
-def _make_icon(status: NetStatus) -> Image.Image:
-    """Draw a simple coloured circle icon for the given network status."""
-    color_map = {
-        NetStatus.ONLINE: "#22c55e",      # green
-        NetStatus.OFFLINE: "#ef4444",     # red
-        NetStatus.LOGGING_IN: "#f59e0b",  # amber
-        NetStatus.UNKNOWN: "#6b7280",     # grey
+def _draw_geometric_glyph(
+    draw: ImageDraw.ImageDraw,
+    status: NetStatus,
+    accent: str,
+) -> None:
+    """Draw an abstract geometric glyph for the given status."""
+    center = _ICON_SIZE // 2
+    orbit_r = 28
+
+    # Neutral orbit ring.
+    draw.ellipse(
+        [
+            center - orbit_r,
+            center - orbit_r,
+            center + orbit_r,
+            center + orbit_r,
+        ],
+        outline="#0f172a",
+        width=4,
+    )
+
+    segment_map = {
+        NetStatus.ONLINE: (302, 352),
+        NetStatus.OFFLINE: (32, 82),
+        NetStatus.LOGGING_IN: (122, 172),
+        NetStatus.UNKNOWN: (212, 262),
     }
-    bg_color = color_map.get(status, "#6b7280")
+    start, end = segment_map.get(status, (212, 262))
+    draw.arc(
+        [
+            center - orbit_r,
+            center - orbit_r,
+            center + orbit_r,
+            center + orbit_r,
+        ],
+        start=start,
+        end=end,
+        fill=accent,
+        width=7,
+    )
+
+    # Center diamond creates the geometric focus.
+    half = 14
+    draw.polygon(
+        [
+            (center, center - half),
+            (center + half, center),
+            (center, center + half),
+            (center - half, center),
+        ],
+        fill="#0f172a",
+    )
+    cut = 5
+    draw.ellipse(
+        [
+            center - cut,
+            center - cut,
+            center + cut,
+            center + cut,
+        ],
+        fill="#f8fafc",
+    )
+
+    node_map = {
+        NetStatus.ONLINE: (58, 6),
+        NetStatus.OFFLINE: (58, 58),
+        NetStatus.LOGGING_IN: (6, 58),
+        NetStatus.UNKNOWN: (6, 6),
+    }
+    node_x, node_y = node_map.get(status, (19, 19))
+    draw.line([(center, center), (node_x, node_y)], fill="#64748b", width=4)
+    node_half = 5
+    draw.rectangle(
+        [
+            node_x - node_half,
+            node_y - node_half,
+            node_x + node_half,
+            node_y + node_half,
+        ],
+        fill=accent,
+    )
+
+
+def _make_icon(status: NetStatus) -> Image.Image:
+    """Draw an abstract geometric icon for the given network status."""
+    color_map = {
+        NetStatus.ONLINE: "#16a34a",      # green
+        NetStatus.OFFLINE: "#dc2626",     # red
+        NetStatus.LOGGING_IN: "#d97706",  # amber
+        NetStatus.UNKNOWN: "#475569",     # slate
+    }
+    accent = color_map.get(status, "#6b7280")
 
     img = Image.new("RGBA", (_ICON_SIZE, _ICON_SIZE), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    margin = 4
+
+    # Light circular base keeps the glyph visible on both bright and dark taskbars.
+    margin = 0
     draw.ellipse(
         [margin, margin, _ICON_SIZE - margin, _ICON_SIZE - margin],
-        fill=bg_color,
+        fill="#f8fafc",
+        outline="#cbd5e1",
+        width=1,
     )
-    # Small white "G" letter hint
-    draw.ellipse(
-        [_ICON_SIZE // 4, _ICON_SIZE // 4,
-         _ICON_SIZE * 3 // 4, _ICON_SIZE * 3 // 4],
-        fill="white",
-    )
+
+    _draw_geometric_glyph(draw, status, accent)
+
     return img
 
 
