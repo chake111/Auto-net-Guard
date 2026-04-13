@@ -6,7 +6,7 @@ pystray is stubbed out in conftest.py so no GUI display is required.
 from __future__ import annotations
 
 import threading
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from PIL import Image
@@ -129,6 +129,24 @@ class TestAppStateDisconnectCount:
         callback.assert_called_once()
 
 
+class TestAppStateGuardianSignals:
+    def test_request_config_reload_sets_both_events(self):
+        state = AppState()
+
+        state.request_config_reload()
+
+        assert state.config_changed.is_set()
+        assert state.wakeup_event.is_set()
+
+    def test_wake_guardian_sets_wakeup_event_only(self):
+        state = AppState()
+
+        state.wake_guardian()
+
+        assert not state.config_changed.is_set()
+        assert state.wakeup_event.is_set()
+
+
 # ---------------------------------------------------------------------------
 # AppState – summary()
 # ---------------------------------------------------------------------------
@@ -163,6 +181,38 @@ class TestAppStateSummary:
     def test_summary_contains_app_name(self):
         state = AppState()
         assert "AutoNetGuard" in state.summary()
+
+
+# ---------------------------------------------------------------------------
+# AppState – tooltip()
+# ---------------------------------------------------------------------------
+
+class TestAppStateTooltip:
+    def test_tooltip_is_single_line_and_contains_profile(self, monkeypatch):
+        import config as _cfg
+
+        monkeypatch.setattr(_cfg, "get_active_profile", lambda: "YKKCLOUD")
+
+        state = AppState()
+        state.status = NetStatus.ONLINE
+        state.increment_disconnect()
+
+        tooltip = state.tooltip()
+
+        assert "\n" not in tooltip
+        assert "✅" not in tooltip
+        assert "YKKCLOUD" in tooltip
+        assert "已联网" in tooltip
+        assert "断线: 1 次" in tooltip
+
+    def test_tooltip_falls_back_to_default_profile(self, monkeypatch):
+        import config as _cfg
+
+        monkeypatch.setattr(_cfg, "get_active_profile", lambda: "")
+
+        state = AppState()
+
+        assert "订阅: 默认" in state.tooltip()
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +323,22 @@ class TestTrayController:
         # _icon is None; _refresh_icon must not raise
         controller._refresh_icon()
 
+    def test_refresh_icon_updates_tooltip_title(self, monkeypatch):
+        import config as _cfg
+
+        monkeypatch.setattr(_cfg, "get_active_profile", lambda: "YKKCLOUD")
+
+        state = AppState()
+        state.status = NetStatus.ONLINE
+        stop_event = threading.Event()
+        controller = TrayController(state, stop_event)
+        mock_icon = MagicMock()
+        controller._icon = mock_icon
+
+        controller._refresh_icon()
+
+        assert mock_icon.title == state.tooltip()
+
     def test_on_login_now_sets_status_to_offline(self):
         state = AppState()
         state.status = NetStatus.ONLINE
@@ -280,6 +346,25 @@ class TestTrayController:
         controller = TrayController(state, stop_event)
         controller._on_login_now(MagicMock(), MagicMock())
         assert state.status == NetStatus.OFFLINE
+        assert state.wakeup_event.is_set()
+
+    def test_on_switch_profile_sets_reload_and_wakeup(self):
+        state = AppState()
+        stop_event = threading.Event()
+        controller = TrayController(state, stop_event)
+        controller._icon = MagicMock()
+
+        with (
+            patch("config.switch_profile") as switch_profile,
+            patch.object(controller, "_build_menu", return_value="menu"),
+        ):
+            controller._on_switch_profile("school")
+
+        switch_profile.assert_called_once_with("school")
+        assert state.config_changed.is_set()
+        assert state.wakeup_event.is_set()
+        assert controller._icon.menu == "menu"
+        controller._icon.update_menu.assert_called_once()
 
     def test_on_quit_sets_stop_event_and_stops_icon(self):
         state = AppState()
@@ -302,8 +387,20 @@ class TestGetNotifyMessage:
         title, message = result
         assert "断网" in message
 
+    def test_online_to_offline_returns_message(self):
+        result = _get_notify_message(NetStatus.ONLINE, NetStatus.OFFLINE)
+        assert result is not None
+        title, message = result
+        assert "断网" in message
+
     def test_logging_in_to_online_returns_message(self):
         result = _get_notify_message(NetStatus.LOGGING_IN, NetStatus.ONLINE)
+        assert result is not None
+        title, message = result
+        assert "恢复" in message or "成功" in message
+
+    def test_offline_to_online_returns_message(self):
+        result = _get_notify_message(NetStatus.OFFLINE, NetStatus.ONLINE)
         assert result is not None
         title, message = result
         assert "恢复" in message or "成功" in message
@@ -316,7 +413,6 @@ class TestGetNotifyMessage:
 
     def test_unknown_transitions_return_none(self):
         assert _get_notify_message(NetStatus.UNKNOWN, NetStatus.ONLINE) is None
-        assert _get_notify_message(NetStatus.ONLINE, NetStatus.OFFLINE) is None
         assert _get_notify_message(NetStatus.OFFLINE, NetStatus.LOGGING_IN) is None
 
     def test_same_status_returns_none(self):

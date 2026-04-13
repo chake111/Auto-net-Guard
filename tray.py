@@ -46,8 +46,12 @@ def _get_notify_message(old: NetStatus, new: NetStatus) -> tuple[str, str] | Non
     """
     if old == NetStatus.ONLINE and new == NetStatus.LOGGING_IN:
         return ("AutoNetGuard", "检测到断网，准备重新登录")
+    if old == NetStatus.ONLINE and new == NetStatus.OFFLINE:
+        return ("AutoNetGuard", "检测到断网，网络已离线")
     if old == NetStatus.LOGGING_IN and new == NetStatus.ONLINE:
         return ("AutoNetGuard", "重新认证成功，网络已恢复")
+    if old == NetStatus.OFFLINE and new == NetStatus.ONLINE:
+        return ("AutoNetGuard", "网络已恢复")
     if old == NetStatus.LOGGING_IN and new == NetStatus.OFFLINE:
         return ("AutoNetGuard", "多次尝试登录失败，请检查账号或网关")
     return None
@@ -80,6 +84,15 @@ class AppState:
     wakeup_event: threading.Event = field(
         default_factory=threading.Event, repr=False
     )
+
+    def wake_guardian(self) -> None:
+        """Wake the guardian thread without forcing a config reload."""
+        self.wakeup_event.set()
+
+    def request_config_reload(self) -> None:
+        """Wake the guardian thread and ask it to reload configuration."""
+        self.config_changed.set()
+        self.wakeup_event.set()
 
     # ---- status ----
     @property
@@ -127,20 +140,34 @@ class AppState:
         if self.on_status_change:
             self.on_status_change()
 
+    def _status_text(self) -> str:
+        return {
+            NetStatus.UNKNOWN: "检测中…",
+            NetStatus.ONLINE: "已联网",
+            NetStatus.OFFLINE: "未联网",
+            NetStatus.LOGGING_IN: "登录中…",
+        }.get(self._status, "未知")
+
     # ---- summary ----
     def summary(self) -> str:
         with self._lock:
-            status_text = {
-                NetStatus.UNKNOWN: "检测中…",
-                NetStatus.ONLINE: "✅ 已联网",
-                NetStatus.OFFLINE: "❌ 未联网",
-                NetStatus.LOGGING_IN: "🔄 登录中…",
-            }.get(self._status, "未知")
+            status_text = self._status_text()
             return (
                 f"AutoNetGuard\n"
                 f"状态: {status_text}\n"
                 f"上次登录: {self._last_login_time}\n"
                 f"断线次数: {self._disconnect_count}"
+            )
+
+    def tooltip(self) -> str:
+        """Return a compact, single-line tooltip for the tray icon."""
+        import config as _cfg  # noqa: PLC0415
+
+        with self._lock:
+            profile = _cfg.get_active_profile() or "默认"
+            return (
+                f"AutoNetGuard | 状态: {self._status_text()}"
+                f" | 订阅: {profile} | 断线: {self._disconnect_count} 次"
             )
 
 
@@ -289,10 +316,8 @@ class TrayController:
 
     def _on_login_now(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:  # noqa: ARG002
         """Trigger an immediate login attempt (signals guardian thread)."""
-        # We signal by temporarily setting status to OFFLINE so the guardian
-        # loop picks it up on the next wake.  The guardian itself will update
-        # the status back.
         self._state.status = NetStatus.OFFLINE
+        self._state.wake_guardian()
 
     def _on_open_settings(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:  # noqa: ARG002
         """打开图形化配置窗口。
@@ -334,8 +359,7 @@ class TrayController:
         import config as _cfg  # noqa: PLC0415
 
         _cfg.switch_profile(name)
-        self._state.config_changed.set()
-        self._state.wakeup_event.set()
+        self._state.request_config_reload()
         # Rebuild menu immediately so the ✔ mark reflects the new profile
         if self._icon:
             self._icon.menu = self._build_menu()
@@ -421,7 +445,7 @@ class TrayController:
         if self._icon is None:
             return
         self._icon.icon = _make_icon(self._state.status)
-        self._icon.title = self._state.summary()
+        self._icon.title = self._state.tooltip()
         self._icon.menu = self._build_menu()
         self._icon.update_menu()
 
@@ -431,7 +455,7 @@ class TrayController:
         self._icon = pystray.Icon(
             name="AutoNetGuard",
             icon=_make_icon(NetStatus.UNKNOWN),
-            title="AutoNetGuard – 检测中…",
+            title=self._state.tooltip(),
             menu=self._build_menu(),
         )
         self._icon.run()
@@ -486,9 +510,9 @@ def run_tray(
             try:
                 from gui_config import ConfigWindow  # noqa: PLC0415
 
-                # on_saved 回调：保存成功后设置 config_changed 事件，
-                # guardian 线程将在下次循环时自动读到新配置值。
-                ConfigWindow(on_saved=lambda: state.config_changed.set()).run()
+                # on_saved 回调：保存成功后唤醒 guardian，
+                # 让它尽快重新加载配置并进入下一轮检测。
+                ConfigWindow(on_saved=lambda: state.request_config_reload()).run()
             finally:
                 _settings_lock.release()
 

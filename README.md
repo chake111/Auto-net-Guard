@@ -45,7 +45,7 @@ git clone https://github.com/chake111/Auto-net-Guard.git
 cd Auto-net-Guard
 ```
 
-2. 创建配置文件：
+1. 创建配置文件：
 
 ```bash
 # Windows
@@ -55,12 +55,12 @@ copy config.ini.example config.ini
 cp config.ini.example config.ini
 ```
 
-3. 编辑 `config.ini`，至少填写以下字段：
+1. 编辑 `config.ini`，至少填写以下字段：
 
 - `user_account`
 - `user_password`
 
-4. 启动程序：
+1. 启动程序：
 
 ```bash
 python guardian.py
@@ -86,7 +86,9 @@ python guardian.py
   - `check_url`：连通性检测地址，通常使用返回 204 的地址。
 - `[timing]`
   - `request_timeout_seconds`：请求超时秒数。
+  - `connectivity_timeout_seconds`：连通性检测超时秒数，默认 2 秒。
   - `check_interval_seconds`：检测间隔秒数。
+  - `online_check_interval_seconds`：断线/在线状态下的快速检测间隔秒数，默认 1 秒。
   - `login_retry_count`：登录失败最大重试次数。
   - `backoff_base_seconds`：重试退避基准秒数。
 - `[logging]`

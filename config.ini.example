@@ -117,8 +117,16 @@ check_url = http://www.google.cn/generate_204
 ; 单次 HTTP 请求超时时间（秒）
 request_timeout_seconds = 8
 
+; 连通性检测超时时间（秒）
+; 专用于判断当前是否已断网，建议比登录超时更短。
+connectivity_timeout_seconds = 2
+
 ; 网络连通性检查间隔（秒）
 check_interval_seconds = 30
+
+; 断线/在线状态下的快速连通性检查间隔（秒）
+; 用于更快发现主动注销、掉线以及恢复上线。
+online_check_interval_seconds = 1
 
 ; 登录失败后的最大重试次数
 login_retry_count = 3

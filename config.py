@@ -341,7 +341,13 @@ CONNECTIVITY_URL: str = _get("connectivity", "check_url", fallback="http://www.g
 # ---------------------------------------------------------------------------
 
 REQUEST_TIMEOUT_SECONDS: int = int(_get("timing", "request_timeout_seconds", fallback="8"))
+CONNECTIVITY_TIMEOUT_SECONDS: int = int(
+    _get("timing", "connectivity_timeout_seconds", fallback="2")
+)
 CHECK_INTERVAL_SECONDS: int = int(_get("timing", "check_interval_seconds", fallback="30"))
+ONLINE_CHECK_INTERVAL_SECONDS: int = int(
+    _get("timing", "online_check_interval_seconds", fallback="1")
+)
 LOGIN_RETRY_COUNT: int = int(_get("timing", "login_retry_count", fallback="3"))
 BACKOFF_BASE_SECONDS: int = int(_get("timing", "backoff_base_seconds", fallback="1"))
 
@@ -467,6 +473,12 @@ def save_config(
 
     _ensure("timing")
     parser.set("timing", "check_interval_seconds", str(check_interval_seconds))
+    parser.set("timing", "connectivity_timeout_seconds", str(CONNECTIVITY_TIMEOUT_SECONDS))
+    parser.set(
+        "timing",
+        "online_check_interval_seconds",
+        str(ONLINE_CHECK_INTERVAL_SECONDS),
+    )
 
     _ensure("ui")
     parser.set("ui", "enable_notifications", "true" if enable_notifications else "false")
@@ -501,7 +513,8 @@ def reload_config() -> None:
     global ACTIVE_PROFILE  # noqa: PLW0603
     global USER_ACCOUNT, USER_PASSWORD, GATEWAY_IP, GATEWAY_HOST  # noqa: PLW0603
     global LOGIN_URL, REFERER, WLAN_AC_IP, WLAN_AC_NAME  # noqa: PLW0603
-    global CONNECTIVITY_URL, REQUEST_TIMEOUT_SECONDS, CHECK_INTERVAL_SECONDS  # noqa: PLW0603
+    global CONNECTIVITY_URL, REQUEST_TIMEOUT_SECONDS, CONNECTIVITY_TIMEOUT_SECONDS  # noqa: PLW0603
+    global CHECK_INTERVAL_SECONDS, ONLINE_CHECK_INTERVAL_SECONDS  # noqa: PLW0603
     global LOGIN_RETRY_COUNT, BACKOFF_BASE_SECONDS, LOG_FILE  # noqa: PLW0603
     global AUTH_TYPE, AUTH_METHOD, AUTH_SUCCESS_MARKERS, AUTH_PARAMS, SRUN_ACID  # noqa: PLW0603
     global ENABLE_NOTIFICATIONS  # noqa: PLW0603
@@ -524,8 +537,22 @@ def reload_config() -> None:
     REQUEST_TIMEOUT_SECONDS = int(
         _get("timing", "request_timeout_seconds", fallback=str(REQUEST_TIMEOUT_SECONDS))
     )
+    CONNECTIVITY_TIMEOUT_SECONDS = int(
+        _get(
+            "timing",
+            "connectivity_timeout_seconds",
+            fallback=str(CONNECTIVITY_TIMEOUT_SECONDS),
+        )
+    )
     CHECK_INTERVAL_SECONDS = int(
         _get("timing", "check_interval_seconds", fallback=str(CHECK_INTERVAL_SECONDS))
+    )
+    ONLINE_CHECK_INTERVAL_SECONDS = int(
+        _get(
+            "timing",
+            "online_check_interval_seconds",
+            fallback=str(ONLINE_CHECK_INTERVAL_SECONDS),
+        )
     )
     LOGIN_RETRY_COUNT = int(
         _get("timing", "login_retry_count", fallback=str(LOGIN_RETRY_COUNT))

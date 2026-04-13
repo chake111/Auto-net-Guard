@@ -44,7 +44,9 @@ check_url = http://www.google.cn/generate_204
 
 [timing]
 request_timeout_seconds = 8
+connectivity_timeout_seconds = 2
 check_interval_seconds = 30
+online_check_interval_seconds = 1
 login_retry_count = 3
 backoff_base_seconds = 1
 

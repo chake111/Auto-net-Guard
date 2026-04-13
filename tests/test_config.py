@@ -237,9 +237,17 @@ class TestModuleConstants:
         assert isinstance(cfg.REQUEST_TIMEOUT_SECONDS, int)
         assert cfg.REQUEST_TIMEOUT_SECONDS > 0
 
+    def test_connectivity_timeout_is_positive_int(self):
+        assert isinstance(cfg.CONNECTIVITY_TIMEOUT_SECONDS, int)
+        assert cfg.CONNECTIVITY_TIMEOUT_SECONDS > 0
+
     def test_check_interval_is_positive_int(self):
         assert isinstance(cfg.CHECK_INTERVAL_SECONDS, int)
         assert cfg.CHECK_INTERVAL_SECONDS > 0
+
+    def test_online_check_interval_is_positive_int(self):
+        assert isinstance(cfg.ONLINE_CHECK_INTERVAL_SECONDS, int)
+        assert cfg.ONLINE_CHECK_INTERVAL_SECONDS > 0
 
     def test_login_retry_count_is_positive_int(self):
         assert isinstance(cfg.LOGIN_RETRY_COUNT, int)
@@ -454,7 +462,8 @@ class TestSwitchProfile:
             "[network]\ngateway_ip = 10.10.10.2\nlogin_url = http://10.10.10.2:801/eportal/portal/login\n"
             "referer = http://10.10.10.2/\nwlan_ac_ip = 10.0.253.2\nwlan_ac_name = WS6812\n"
             "[connectivity]\ncheck_url = http://www.google.cn/generate_204\n"
-            "[timing]\nrequest_timeout_seconds = 8\ncheck_interval_seconds = 30\n"
+            "[timing]\nrequest_timeout_seconds = 8\nconnectivity_timeout_seconds = 2\n"
+            "check_interval_seconds = 30\nonline_check_interval_seconds = 1\n"
             "login_retry_count = 3\nbackoff_base_seconds = 1\n"
             "[logging]\nlog_file = service.log\n"
             "[ui]\nenable_notifications = true\n"
@@ -481,7 +490,8 @@ class TestSwitchProfile:
             "[network]\ngateway_ip = 10.10.10.2\nlogin_url = http://10.10.10.2:801/eportal/portal/login\n"
             "referer = http://10.10.10.2/\nwlan_ac_ip = 10.0.253.2\nwlan_ac_name = WS6812\n"
             "[connectivity]\ncheck_url = http://www.google.cn/generate_204\n"
-            "[timing]\nrequest_timeout_seconds = 8\ncheck_interval_seconds = 30\n"
+            "[timing]\nrequest_timeout_seconds = 8\nconnectivity_timeout_seconds = 2\n"
+            "check_interval_seconds = 30\nonline_check_interval_seconds = 1\n"
             "login_retry_count = 3\nbackoff_base_seconds = 1\n"
             "[logging]\nlog_file = service.log\n"
             "[ui]\nenable_notifications = true\n"

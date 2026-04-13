@@ -14,6 +14,8 @@ from guardian import (
     _normalize_mac,
     _build_login_params,
     _is_process_running,
+    _next_check_interval,
+    _wait_for_wakeup_or_timeout,
     acquire_instance_lock,
     check_connectivity,
     guardian_target,
@@ -102,6 +104,17 @@ class TestCheckConnectivity:
         check_connectivity(session)
         _, kwargs = session.get.call_args
         assert kwargs.get("allow_redirects") is False
+
+    def test_uses_dedicated_connectivity_timeout(self):
+        session = MagicMock()
+        response = MagicMock()
+        response.status_code = 204
+        session.get.return_value = response
+
+        check_connectivity(session)
+
+        _, kwargs = session.get.call_args
+        assert kwargs.get("timeout") == guardian._cfg.CONNECTIVITY_TIMEOUT_SECONDS
 
 
 # ---------------------------------------------------------------------------
@@ -406,10 +419,14 @@ class TestGuardianTarget:
             stop_event.set()
             return False
 
+        def fake_login(session, authenticator):
+            assert state.status == NetStatus.OFFLINE
+            return False
+
         with (
             patch("guardian.get_active_ip", return_value="10.0.0.1"),
             patch("guardian.check_connectivity", side_effect=fake_check),
-            patch("guardian.login_with_retry", return_value=False),
+            patch("guardian.login_with_retry", side_effect=fake_login),
             patch("guardian.setup_logging"),
             patch("guardian.auth_plugins.get_authenticator", return_value=self._make_auth()),
         ):
@@ -539,3 +556,41 @@ class TestGuardianTarget:
         # get_authenticator should have been called at least twice (once at
         # startup and once after config_changed was detected).
         assert get_auth_calls["n"] >= 2
+
+    def test_wait_helper_returns_immediately_on_wakeup(self):
+        class FakeEvent:
+            def __init__(self) -> None:
+                self.wait_calls: list[float | None] = []
+                self.cleared = False
+
+            def is_set(self) -> bool:
+                return False
+
+            def wait(self, timeout: float | None = None) -> bool:
+                self.wait_calls.append(timeout)
+                return True
+
+            def clear(self) -> None:
+                self.cleared = True
+
+        stop_event = FakeEvent()
+        wakeup_event = FakeEvent()
+
+        _wait_for_wakeup_or_timeout(stop_event, wakeup_event, 10.0)
+
+        assert wakeup_event.wait_calls
+        assert wakeup_event.wait_calls[0] is not None
+        assert wakeup_event.wait_calls[0] <= 0.5
+        assert wakeup_event.cleared is True
+
+    @pytest.mark.parametrize(
+        "status, expected",
+        [
+            (NetStatus.ONLINE, 1.0),
+            (NetStatus.UNKNOWN, 1.0),
+            (NetStatus.OFFLINE, 1.0),
+            (NetStatus.LOGGING_IN, float(guardian._cfg.CHECK_INTERVAL_SECONDS)),
+        ],
+    )
+    def test_next_check_interval_prefers_fast_online_polling(self, status, expected):
+        assert _next_check_interval(status) == expected
