@@ -20,7 +20,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Callable
+from typing import Any, Callable
 
 from PIL import Image, ImageDraw
 import pystray
@@ -94,6 +94,16 @@ class AppState:
         self.config_changed.set()
         self.wakeup_event.set()
 
+    def _emit_state_change(self, old_status: NetStatus | None = None) -> None:
+        """Notify listeners that the shared state changed."""
+        if self.on_status_change:
+            self.on_status_change()
+        if old_status is not None and self.on_notify:
+            notification = _get_notify_message(old_status, self._status)
+            if notification:
+                title, message = notification
+                self.on_notify(title, message)
+
     # ---- status ----
     @property
     def status(self) -> NetStatus:
@@ -107,13 +117,7 @@ class AppState:
             old_status = self._status
             self._status = value
         if changed:
-            if self.on_status_change:
-                self.on_status_change()
-            if self.on_notify:
-                notification = _get_notify_message(old_status, value)
-                if notification:
-                    title, message = notification
-                    self.on_notify(title, message)
+            self._emit_state_change(old_status)
 
     # ---- last_login_time ----
     @property
@@ -125,8 +129,7 @@ class AppState:
     def last_login_time(self, value: str) -> None:
         with self._lock:
             self._last_login_time = value
-        if self.on_status_change:
-            self.on_status_change()
+        self._emit_state_change()
 
     # ---- disconnect_count ----
     @property
@@ -137,8 +140,7 @@ class AppState:
     def increment_disconnect(self) -> None:
         with self._lock:
             self._disconnect_count += 1
-        if self.on_status_change:
-            self.on_status_change()
+        self._emit_state_change()
 
     def _status_text(self) -> str:
         return {
@@ -148,15 +150,20 @@ class AppState:
             NetStatus.LOGGING_IN: "登录中…",
         }.get(self._status, "未知")
 
+    def _snapshot(self) -> tuple[str, str, int]:
+        """Return a stable snapshot of the text fields used by tray rendering."""
+        status_text = self._status_text()
+        return status_text, self._last_login_time, self._disconnect_count
+
     # ---- summary ----
     def summary(self) -> str:
         with self._lock:
-            status_text = self._status_text()
+            status_text, last_login_time, disconnect_count = self._snapshot()
             return (
                 f"AutoNetGuard\n"
                 f"状态: {status_text}\n"
-                f"上次登录: {self._last_login_time}\n"
-                f"断线次数: {self._disconnect_count}"
+                f"上次登录: {last_login_time}\n"
+                f"断线次数: {disconnect_count}"
             )
 
     def tooltip(self) -> str:
@@ -164,10 +171,11 @@ class AppState:
         import config as _cfg  # noqa: PLC0415
 
         with self._lock:
+            status_text, _, disconnect_count = self._snapshot()
             profile = _cfg.get_active_profile() or "默认"
             return (
-                f"AutoNetGuard | 状态: {self._status_text()}"
-                f" | 订阅: {profile} | 断线: {self._disconnect_count} 次"
+                f"AutoNetGuard | 状态: {status_text}"
+                f" | 订阅: {profile} | 断线: {disconnect_count} 次"
             )
 
 
@@ -305,7 +313,7 @@ class TrayController:
         self._stop_event = stop_event
         # 打开设置窗口的回调（由 run_tray 注入，防止多进程/多线程重入）
         self._on_settings_open = on_settings_open
-        self._icon: pystray.Icon | None = None
+        self._icon: Any | None = None
         self._notification_lock = threading.Lock()
         self._last_notification_monotonic: float = 0.0
 
@@ -316,12 +324,12 @@ class TrayController:
 
     # ---- menu actions -------------------------------------------------------
 
-    def _on_login_now(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:  # noqa: ARG002
+    def _on_login_now(self, icon: Any, item: Any) -> None:  # noqa: ARG002
         """Trigger an immediate login attempt (signals guardian thread)."""
         self._state.status = NetStatus.LOGGING_IN
         self._state.wake_guardian()
 
-    def _on_open_settings(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:  # noqa: ARG002
+    def _on_open_settings(self, icon: Any, item: Any) -> None:  # noqa: ARG002
         """打开图形化配置窗口。
 
         通过注入的回调在独立守护线程中运行 tkinter 窗口，
@@ -330,16 +338,24 @@ class TrayController:
         if self._on_settings_open:
             self._on_settings_open()
 
-    def _on_toggle_autostart(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:  # noqa: ARG002
+    def _on_toggle_autostart(self, icon: Any, item: Any) -> None:  # noqa: ARG002
         if is_autostart_enabled():
             disable_autostart()
         else:
             enable_autostart()
         self._refresh_menu()
 
-    def _on_quit(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:  # noqa: ARG002
+    def _on_quit(self, icon: Any, item: Any) -> None:  # noqa: ARG002
         self._stop_event.set()
         icon.stop()
+
+    def _with_icon(self, callback: Callable[[Any], None]) -> bool:
+        """Run *callback* with the tray icon if it has been created."""
+        icon = self._icon
+        if icon is None:
+            return False
+        callback(icon)
+        return True
 
     # ---- profile switching --------------------------------------------------
 
@@ -375,7 +391,7 @@ class TrayController:
             )
 
         def _make_handler(profile_name: str):
-            def _handler(icon: pystray.Icon, item: pystray.MenuItem) -> None:  # noqa: ARG001
+            def _handler(icon: Any, item: Any) -> None:  # noqa: ARG001
                 self._on_switch_profile(profile_name)
             return _handler
 
@@ -408,24 +424,24 @@ class TrayController:
 
         if not _cfg.ENABLE_NOTIFICATIONS:
             return
-        if self._icon is None:
-            return
         try:
             now = time.monotonic()
             with self._notification_lock:
                 if now - self._last_notification_monotonic < _cfg.STATUS_NOTIFICATION_COOLDOWN_SECONDS:
                     return
                 self._last_notification_monotonic = now
-            self._icon.notify(message, title)
+            if not self._with_icon(lambda icon: icon.notify(message, title)):
+                return
         except Exception:  # pylint: disable=broad-except  # noqa: BLE001
             # Notification delivery is best-effort; never crash the guardian loop.
             pass
 
     def _refresh_menu(self) -> None:
-        if self._icon is None:
-            return
-        self._icon.menu = self._build_menu()
-        self._icon.update_menu()
+        def _update(icon: Any) -> None:
+            icon.menu = self._build_menu()
+            icon.update_menu()
+
+        self._with_icon(_update)
 
     # ---- menu builder -------------------------------------------------------
 
@@ -450,10 +466,11 @@ class TrayController:
     # ---- icon refresh -------------------------------------------------------
 
     def _refresh_icon(self) -> None:
-        if self._icon is None:
-            return
-        self._icon.icon = _make_icon(self._state.status)
-        self._icon.title = self._state.tooltip()
+        def _update(icon: Any) -> None:
+            icon.icon = _make_icon(self._state.status)
+            icon.title = self._state.tooltip()
+
+        self._with_icon(_update)
 
     # ---- run (blocks main thread) ------------------------------------------
 
@@ -464,7 +481,9 @@ class TrayController:
             title=self._state.tooltip(),
             menu=self._build_menu(),
         )
-        self._icon.run()
+        icon = self._icon
+        if icon is not None:
+            icon.run()
 
 
 # ---------------------------------------------------------------------------
