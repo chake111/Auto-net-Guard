@@ -47,6 +47,7 @@ request_timeout_seconds = 8
 connectivity_timeout_seconds = 2
 check_interval_seconds = 30
 online_check_interval_seconds = 1
+offline_debounce_failures = 2
 login_retry_count = 3
 backoff_base_seconds = 1
 
@@ -55,6 +56,7 @@ log_file = service.log
 
 [ui]
 enable_notifications = true
+status_notification_cooldown_seconds = 2
 
 [auth]
 auth_type = drcom

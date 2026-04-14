@@ -306,6 +306,8 @@ class TrayController:
         # 打开设置窗口的回调（由 run_tray 注入，防止多进程/多线程重入）
         self._on_settings_open = on_settings_open
         self._icon: pystray.Icon | None = None
+        self._notification_lock = threading.Lock()
+        self._last_notification_monotonic: float = 0.0
 
         # Wire state changes → icon update
         state.on_status_change = self._refresh_icon
@@ -316,7 +318,7 @@ class TrayController:
 
     def _on_login_now(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:  # noqa: ARG002
         """Trigger an immediate login attempt (signals guardian thread)."""
-        self._state.status = NetStatus.OFFLINE
+        self._state.status = NetStatus.LOGGING_IN
         self._state.wake_guardian()
 
     def _on_open_settings(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:  # noqa: ARG002
@@ -333,10 +335,7 @@ class TrayController:
             disable_autostart()
         else:
             enable_autostart()
-        # Rebuild menu to reflect new state
-        if self._icon:
-            self._icon.menu = self._build_menu()
-            self._icon.update_menu()
+        self._refresh_menu()
 
     def _on_quit(self, icon: pystray.Icon, item: pystray.MenuItem) -> None:  # noqa: ARG002
         self._stop_event.set()
@@ -361,9 +360,7 @@ class TrayController:
         _cfg.switch_profile(name)
         self._state.request_config_reload()
         # Rebuild menu immediately so the ✔ mark reflects the new profile
-        if self._icon:
-            self._icon.menu = self._build_menu()
-            self._icon.update_menu()
+        self._refresh_menu()
 
     def _build_profile_submenu(self) -> pystray.Menu:
         """Build the dynamic "切换网络环境" submenu from configured profiles."""
@@ -414,10 +411,21 @@ class TrayController:
         if self._icon is None:
             return
         try:
+            now = time.monotonic()
+            with self._notification_lock:
+                if now - self._last_notification_monotonic < _cfg.STATUS_NOTIFICATION_COOLDOWN_SECONDS:
+                    return
+                self._last_notification_monotonic = now
             self._icon.notify(message, title)
         except Exception:  # pylint: disable=broad-except  # noqa: BLE001
             # Notification delivery is best-effort; never crash the guardian loop.
             pass
+
+    def _refresh_menu(self) -> None:
+        if self._icon is None:
+            return
+        self._icon.menu = self._build_menu()
+        self._icon.update_menu()
 
     # ---- menu builder -------------------------------------------------------
 
@@ -446,8 +454,6 @@ class TrayController:
             return
         self._icon.icon = _make_icon(self._state.status)
         self._icon.title = self._state.tooltip()
-        self._icon.menu = self._build_menu()
-        self._icon.update_menu()
 
     # ---- run (blocks main thread) ------------------------------------------
 

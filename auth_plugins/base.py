@@ -7,9 +7,31 @@ implement the :meth:`login` method.  They may also override
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 
 import requests
+
+
+def _check_connectivity(
+    session: requests.Session,
+    timeout: float | int | None = None,
+    logger: logging.Logger | None = None,
+) -> bool:
+    """Return whether the configured connectivity URL responds with HTTP 204."""
+    import config as _cfg  # noqa: PLC0415  (deferred to support hot-reload)
+
+    try:
+        response = session.get(
+            _cfg.CONNECTIVITY_URL,
+            timeout=_cfg.REQUEST_TIMEOUT_SECONDS if timeout is None else timeout,
+            allow_redirects=False,
+        )
+        return response.status_code == 204
+    except requests.RequestException as exc:
+        if logger is not None:
+            logger.warning("Connectivity check failed: %s", exc)
+        return False
 
 
 class BaseAuthenticator(ABC):
@@ -68,14 +90,4 @@ class BaseAuthenticator(ABC):
             ``False`` otherwise.  Never raises – connectivity failures are
             caught and returned as ``False``.
         """
-        import config as _cfg  # noqa: PLC0415  (deferred to support hot-reload)
-
-        try:
-            response = session.get(
-                _cfg.CONNECTIVITY_URL,
-                timeout=_cfg.REQUEST_TIMEOUT_SECONDS,
-                allow_redirects=False,
-            )
-            return response.status_code == 204
-        except requests.RequestException:
-            return False
+        return _check_connectivity(session)

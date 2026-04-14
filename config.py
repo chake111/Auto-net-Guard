@@ -168,12 +168,75 @@ def _maybe_encrypt_credentials(parser: configparser.ConfigParser,
             parser.write(fh)
 
 
+def _load_parser() -> configparser.ConfigParser:
+    """Return a parser loaded from the current config file."""
+    parser = configparser.ConfigParser()
+    parser.read(_CONFIG_PATH, encoding="utf-8")
+    return parser
+
+
+def _ensure_section(parser: configparser.ConfigParser, section: str) -> None:
+    if not parser.has_section(section):
+        parser.add_section(section)
+
+
+def _write_parser(parser: configparser.ConfigParser) -> None:
+    with _CONFIG_PATH.open("w", encoding="utf-8") as fh:
+        parser.write(fh)
+
+
+def _store_credentials_and_network(
+    parser: configparser.ConfigParser,
+    active_profile: str,
+    user_account: str,
+    user_password: str,
+    gateway_ip: str,
+    login_url: str,
+) -> None:
+    referer = f"http://{gateway_ip}/"
+    if active_profile:
+        profile_section = f"profile:{active_profile}"
+        _ensure_section(parser, profile_section)
+        parser.set(profile_section, "user_account", user_account)
+        parser.set(profile_section, "user_password", user_password)
+        parser.set(profile_section, "gateway_ip", gateway_ip)
+        parser.set(profile_section, "login_url", login_url)
+        parser.set(profile_section, "referer", referer)
+        return
+
+    _ensure_section(parser, "credentials")
+    parser.set("credentials", "user_account", user_account)
+    parser.set("credentials", "user_password", user_password)
+
+    _ensure_section(parser, "network")
+    parser.set("network", "gateway_ip", gateway_ip)
+    parser.set("network", "login_url", login_url)
+    parser.set("network", "referer", referer)
+
+
+def _store_timing_and_ui(
+    parser: configparser.ConfigParser,
+    check_interval_seconds: int,
+    enable_notifications: bool,
+) -> None:
+    _ensure_section(parser, "timing")
+    parser.set("timing", "check_interval_seconds", str(check_interval_seconds))
+    parser.set("timing", "connectivity_timeout_seconds", str(CONNECTIVITY_TIMEOUT_SECONDS))
+    parser.set(
+        "timing",
+        "online_check_interval_seconds",
+        str(ONLINE_CHECK_INTERVAL_SECONDS),
+    )
+
+    _ensure_section(parser, "ui")
+    parser.set("ui", "enable_notifications", "true" if enable_notifications else "false")
+
+
 # ---------------------------------------------------------------------------
 # Load config.ini and auto-encrypt credentials on first run
 # ---------------------------------------------------------------------------
 
-_parser = configparser.ConfigParser()
-_parser.read(_CONFIG_PATH, encoding="utf-8")
+_parser = _load_parser()
 
 # Encrypt plaintext credentials and persist the change immediately.
 _maybe_encrypt_credentials(_parser, _CONFIG_PATH)
@@ -187,7 +250,26 @@ def _get(section: str, key: str, fallback: str | None = None) -> str:
     Raises ``KeyError`` when the key is absent and no fallback is provided,
     so that missing *required* settings (credentials) are caught early.
     """
-    value = _parser.get(section, key, fallback=fallback)
+    return _get_from_parser(_parser, section, key, fallback=fallback)
+
+
+def _parse_bool(value: str) -> bool:
+    """Parse a config string as a boolean value.
+
+    Returns ``False`` only for the canonical false-y strings; everything else
+    is treated as ``True`` to match common INI-file conventions.
+    """
+    return value.lower() not in ("false", "0", "no", "off")
+
+
+def _get_from_parser(
+    parser: configparser.ConfigParser,
+    section: str,
+    key: str,
+    fallback: str | None = None,
+) -> str:
+    """Read a value from *parser* with the same encryption semantics as :func:`_get`."""
+    value = parser.get(section, key, fallback=fallback)
     if value is None:
         raise KeyError(
             f"Required config key [{section}] {key} is missing from {_CONFIG_PATH}. "
@@ -206,13 +288,35 @@ def _get(section: str, key: str, fallback: str | None = None) -> str:
     return value
 
 
-def _parse_bool(value: str) -> bool:
-    """Parse a config string as a boolean value.
+def _get_profile_or_fallback_from(
+    parser: configparser.ConfigParser,
+    key: str,
+    legacy_section: str,
+    fallback: str | None = None,
+) -> str:
+    """Return *key* from the active profile section in *parser*.
 
-    Returns ``False`` only for the canonical false-y strings; everything else
-    is treated as ``True`` to match common INI-file conventions.
+    Falls back to *legacy_section* and then to *fallback*, preserving the same
+    behavior as :func:`_get_profile_or_fallback`.
     """
-    return value.lower() not in ("false", "0", "no", "off")
+    profile = parser.get("global", "active_profile", fallback="").strip()
+    if profile:
+        profile_section = f"profile:{profile}"
+        if parser.has_section(profile_section):
+            raw = parser.get(profile_section, key, fallback=None)
+            if raw is not None:
+                if _is_encrypted(raw):
+                    try:
+                        return _decrypt_value(raw)
+                    except Exception as exc:  # pylint: disable=broad-except
+                        raise KeyError(
+                            f"Failed to decrypt [{profile_section}] {key} in "
+                            f"{_CONFIG_PATH}. The config.ini was likely created "
+                            "on a different machine. Please re-enter your "
+                            "plaintext credentials and restart the application."
+                        ) from exc
+                return raw
+    return _get_from_parser(parser, legacy_section, key, fallback=fallback)
 
 
 # ---------------------------------------------------------------------------
@@ -236,24 +340,7 @@ def _get_profile_or_fallback(
     Encrypted values (``ENC:`` prefix) are decrypted transparently at every
     step.
     """
-    profile = _parser.get("global", "active_profile", fallback="").strip()
-    if profile:
-        profile_section = f"profile:{profile}"
-        if _parser.has_section(profile_section):
-            raw = _parser.get(profile_section, key, fallback=None)
-            if raw is not None:
-                if _is_encrypted(raw):
-                    try:
-                        return _decrypt_value(raw)
-                    except Exception as exc:
-                        raise KeyError(
-                            f"Failed to decrypt [{profile_section}] {key} in "
-                            f"{_CONFIG_PATH}. The config.ini was likely created "
-                            "on a different machine. Please re-enter your "
-                            "plaintext credentials and restart the application."
-                        ) from exc
-                return raw
-    return _get(legacy_section, key, fallback=fallback)
+    return _get_profile_or_fallback_from(_parser, key, legacy_section, fallback=fallback)
 
 
 def list_profiles() -> list[str]:
@@ -290,15 +377,13 @@ def switch_profile(name: str) -> None:
     ``state.wakeup_event`` so that the guardian thread applies the new
     configuration and reconnects immediately.
     """
-    parser = configparser.ConfigParser()
-    parser.read(_CONFIG_PATH, encoding="utf-8")
+    parser = _load_parser()
 
     if not parser.has_section("global"):
         parser.add_section("global")
     parser.set("global", "active_profile", name)
 
-    with _CONFIG_PATH.open("w", encoding="utf-8") as fh:
-        parser.write(fh)
+    _write_parser(parser)
 
     reload_config()
 
@@ -348,6 +433,9 @@ CHECK_INTERVAL_SECONDS: int = int(_get("timing", "check_interval_seconds", fallb
 ONLINE_CHECK_INTERVAL_SECONDS: int = int(
     _get("timing", "online_check_interval_seconds", fallback="1")
 )
+OFFLINE_DEBOUNCE_FAILURES: int = int(
+    _get("timing", "offline_debounce_failures", fallback="2")
+)
 LOGIN_RETRY_COUNT: int = int(_get("timing", "login_retry_count", fallback="3"))
 BACKOFF_BASE_SECONDS: int = int(_get("timing", "backoff_base_seconds", fallback="1"))
 
@@ -362,6 +450,9 @@ LOG_FILE: str = _get("logging", "log_file", fallback="service.log")
 # ---------------------------------------------------------------------------
 
 ENABLE_NOTIFICATIONS: bool = _parse_bool(_get("ui", "enable_notifications", fallback="true"))
+STATUS_NOTIFICATION_COOLDOWN_SECONDS: float = float(
+    _get("ui", "status_notification_cooldown_seconds", fallback="2")
+)
 
 # ---------------------------------------------------------------------------
 # [auth]
@@ -411,6 +502,199 @@ def _load_auth_params(parser: configparser.ConfigParser) -> dict[str, str]:
     return result
 
 
+def _snapshot_runtime_values() -> dict[str, object]:
+    """Capture the current module-level runtime config as fallback values."""
+    return {
+        "ACTIVE_PROFILE": ACTIVE_PROFILE,
+        "USER_ACCOUNT": USER_ACCOUNT,
+        "USER_PASSWORD": USER_PASSWORD,
+        "GATEWAY_IP": GATEWAY_IP,
+        "LOGIN_URL": LOGIN_URL,
+        "REFERER": REFERER,
+        "WLAN_AC_IP": WLAN_AC_IP,
+        "WLAN_AC_NAME": WLAN_AC_NAME,
+        "CONNECTIVITY_URL": CONNECTIVITY_URL,
+        "REQUEST_TIMEOUT_SECONDS": REQUEST_TIMEOUT_SECONDS,
+        "CONNECTIVITY_TIMEOUT_SECONDS": CONNECTIVITY_TIMEOUT_SECONDS,
+        "CHECK_INTERVAL_SECONDS": CHECK_INTERVAL_SECONDS,
+        "ONLINE_CHECK_INTERVAL_SECONDS": ONLINE_CHECK_INTERVAL_SECONDS,
+        "OFFLINE_DEBOUNCE_FAILURES": OFFLINE_DEBOUNCE_FAILURES,
+        "LOGIN_RETRY_COUNT": LOGIN_RETRY_COUNT,
+        "BACKOFF_BASE_SECONDS": BACKOFF_BASE_SECONDS,
+        "LOG_FILE": LOG_FILE,
+        "AUTH_TYPE": AUTH_TYPE,
+        "AUTH_METHOD": AUTH_METHOD,
+        "AUTH_SUCCESS_MARKERS": AUTH_SUCCESS_MARKERS,
+        "AUTH_PARAMS": AUTH_PARAMS,
+        "SRUN_ACID": SRUN_ACID,
+        "STATUS_NOTIFICATION_COOLDOWN_SECONDS": STATUS_NOTIFICATION_COOLDOWN_SECONDS,
+        "ENABLE_NOTIFICATIONS": ENABLE_NOTIFICATIONS,
+    }
+
+
+def _load_runtime_values(
+    parser: configparser.ConfigParser,
+    previous_values: dict[str, object],
+) -> dict[str, object]:
+    """Build module-level runtime values from *parser* with fallbacks."""
+    values: dict[str, object] = {
+        "ACTIVE_PROFILE": parser.get("global", "active_profile", fallback="").strip(),
+        "USER_ACCOUNT": _get_profile_or_fallback_from(
+            parser,
+            "user_account",
+            "credentials",
+            fallback=str(previous_values["USER_ACCOUNT"]),
+        ),
+        "USER_PASSWORD": _get_profile_or_fallback_from(
+            parser,
+            "user_password",
+            "credentials",
+            fallback=str(previous_values["USER_PASSWORD"]),
+        ),
+        "GATEWAY_IP": _get_profile_or_fallback_from(
+            parser,
+            "gateway_ip",
+            "network",
+            fallback=str(previous_values["GATEWAY_IP"]),
+        ),
+        "LOGIN_URL": _get_profile_or_fallback_from(
+            parser,
+            "login_url",
+            "network",
+            fallback=str(previous_values["LOGIN_URL"]),
+        ),
+        "REFERER": _get_profile_or_fallback_from(
+            parser,
+            "referer",
+            "network",
+            fallback=str(previous_values["REFERER"]),
+        ),
+        "WLAN_AC_IP": _get_profile_or_fallback_from(
+            parser,
+            "wlan_ac_ip",
+            "network",
+            fallback=str(previous_values["WLAN_AC_IP"]),
+        ),
+        "WLAN_AC_NAME": _get_profile_or_fallback_from(
+            parser,
+            "wlan_ac_name",
+            "network",
+            fallback=str(previous_values["WLAN_AC_NAME"]),
+        ),
+        "CONNECTIVITY_URL": _get_from_parser(
+            parser,
+            "connectivity",
+            "check_url",
+            fallback=str(previous_values["CONNECTIVITY_URL"]),
+        ),
+        "REQUEST_TIMEOUT_SECONDS": int(
+            _get_from_parser(
+                parser,
+                "timing",
+                "request_timeout_seconds",
+                fallback=str(previous_values["REQUEST_TIMEOUT_SECONDS"]),
+            )
+        ),
+        "CONNECTIVITY_TIMEOUT_SECONDS": int(
+            _get_from_parser(
+                parser,
+                "timing",
+                "connectivity_timeout_seconds",
+                fallback=str(previous_values["CONNECTIVITY_TIMEOUT_SECONDS"]),
+            )
+        ),
+        "CHECK_INTERVAL_SECONDS": int(
+            _get_from_parser(
+                parser,
+                "timing",
+                "check_interval_seconds",
+                fallback=str(previous_values["CHECK_INTERVAL_SECONDS"]),
+            )
+        ),
+        "ONLINE_CHECK_INTERVAL_SECONDS": int(
+            _get_from_parser(
+                parser,
+                "timing",
+                "online_check_interval_seconds",
+                fallback=str(previous_values["ONLINE_CHECK_INTERVAL_SECONDS"]),
+            )
+        ),
+        "OFFLINE_DEBOUNCE_FAILURES": int(
+            _get_from_parser(
+                parser,
+                "timing",
+                "offline_debounce_failures",
+                fallback=str(previous_values["OFFLINE_DEBOUNCE_FAILURES"]),
+            )
+        ),
+        "LOGIN_RETRY_COUNT": int(
+            _get_from_parser(
+                parser,
+                "timing",
+                "login_retry_count",
+                fallback=str(previous_values["LOGIN_RETRY_COUNT"]),
+            )
+        ),
+        "BACKOFF_BASE_SECONDS": int(
+            _get_from_parser(
+                parser,
+                "timing",
+                "backoff_base_seconds",
+                fallback=str(previous_values["BACKOFF_BASE_SECONDS"]),
+            )
+        ),
+        "LOG_FILE": _get_from_parser(
+            parser,
+            "logging",
+            "log_file",
+            fallback=str(previous_values["LOG_FILE"]),
+        ),
+        "AUTH_TYPE": _get_from_parser(
+            parser,
+            "auth",
+            "auth_type",
+            fallback=str(previous_values["AUTH_TYPE"]),
+        ),
+        "AUTH_METHOD": _get_from_parser(
+            parser,
+            "auth",
+            "auth_method",
+            fallback=str(previous_values["AUTH_METHOD"]),
+        ),
+        "AUTH_SUCCESS_MARKERS": _get_from_parser(
+            parser,
+            "auth",
+            "auth_success_markers",
+            fallback=str(previous_values["AUTH_SUCCESS_MARKERS"]),
+        ),
+        "AUTH_PARAMS": _load_auth_params(parser),
+        "SRUN_ACID": _get_from_parser(
+            parser,
+            "srun",
+            "acid",
+            fallback=str(previous_values["SRUN_ACID"]),
+        ),
+        "STATUS_NOTIFICATION_COOLDOWN_SECONDS": float(
+            _get_from_parser(
+                parser,
+                "ui",
+                "status_notification_cooldown_seconds",
+                fallback=str(previous_values["STATUS_NOTIFICATION_COOLDOWN_SECONDS"]),
+            )
+        ),
+        "ENABLE_NOTIFICATIONS": _parse_bool(
+            _get_from_parser(
+                parser,
+                "ui",
+                "enable_notifications",
+                fallback="true" if previous_values["ENABLE_NOTIFICATIONS"] else "false",
+            )
+        ),
+    }
+    values["GATEWAY_HOST"] = f"http://{values['GATEWAY_IP']}"
+    return values
+
+
 AUTH_PARAMS: dict[str, str] = _load_auth_params(_parser)
 
 # ---------------------------------------------------------------------------
@@ -442,49 +726,19 @@ def save_config(
     global LOGIN_URL, REFERER, CHECK_INTERVAL_SECONDS, ENABLE_NOTIFICATIONS  # noqa: PLW0603
 
     # 读取现有配置文件，保留本次未修改的字段
-    parser = configparser.ConfigParser()
-    parser.read(_CONFIG_PATH, encoding="utf-8")
-
-    def _ensure(section: str) -> None:
-        if not parser.has_section(section):
-            parser.add_section(section)
-
-    # 凭据和网络设置：优先写入活跃 Profile，否则写入传统节
+    parser = _load_parser()
     active_profile = parser.get("global", "active_profile", fallback="").strip()
-    if active_profile:
-        profile_section = f"profile:{active_profile}"
-        _ensure(profile_section)
-        # 存明文；_maybe_encrypt_credentials 随后将其加密并回写
-        parser.set(profile_section, "user_account", user_account)
-        parser.set(profile_section, "user_password", user_password)
-        parser.set(profile_section, "gateway_ip", gateway_ip)
-        parser.set(profile_section, "login_url", login_url)
-        parser.set(profile_section, "referer", f"http://{gateway_ip}/")
-    else:
-        _ensure("credentials")
-        # 存明文；_maybe_encrypt_credentials 随后将其加密并回写
-        parser.set("credentials", "user_account", user_account)
-        parser.set("credentials", "user_password", user_password)
-
-        _ensure("network")
-        parser.set("network", "gateway_ip", gateway_ip)
-        parser.set("network", "login_url", login_url)
-        parser.set("network", "referer", f"http://{gateway_ip}/")
-
-    _ensure("timing")
-    parser.set("timing", "check_interval_seconds", str(check_interval_seconds))
-    parser.set("timing", "connectivity_timeout_seconds", str(CONNECTIVITY_TIMEOUT_SECONDS))
-    parser.set(
-        "timing",
-        "online_check_interval_seconds",
-        str(ONLINE_CHECK_INTERVAL_SECONDS),
+    _store_credentials_and_network(
+        parser,
+        active_profile,
+        user_account,
+        user_password,
+        gateway_ip,
+        login_url,
     )
+    _store_timing_and_ui(parser, check_interval_seconds, enable_notifications)
 
-    _ensure("ui")
-    parser.set("ui", "enable_notifications", "true" if enable_notifications else "false")
-
-    with _CONFIG_PATH.open("w", encoding="utf-8") as fh:
-        parser.write(fh)
+    _write_parser(parser)
 
     # 加密明文凭据并回写文件
     _maybe_encrypt_credentials(parser, _CONFIG_PATH)
@@ -515,57 +769,13 @@ def reload_config() -> None:
     global LOGIN_URL, REFERER, WLAN_AC_IP, WLAN_AC_NAME  # noqa: PLW0603
     global CONNECTIVITY_URL, REQUEST_TIMEOUT_SECONDS, CONNECTIVITY_TIMEOUT_SECONDS  # noqa: PLW0603
     global CHECK_INTERVAL_SECONDS, ONLINE_CHECK_INTERVAL_SECONDS  # noqa: PLW0603
+    global OFFLINE_DEBOUNCE_FAILURES  # noqa: PLW0603
     global LOGIN_RETRY_COUNT, BACKOFF_BASE_SECONDS, LOG_FILE  # noqa: PLW0603
     global AUTH_TYPE, AUTH_METHOD, AUTH_SUCCESS_MARKERS, AUTH_PARAMS, SRUN_ACID  # noqa: PLW0603
-    global ENABLE_NOTIFICATIONS  # noqa: PLW0603
+    global ENABLE_NOTIFICATIONS, STATUS_NOTIFICATION_COOLDOWN_SECONDS  # noqa: PLW0603
 
-    _parser = configparser.ConfigParser()
-    _parser.read(_CONFIG_PATH, encoding="utf-8")
-    _maybe_encrypt_credentials(_parser, _CONFIG_PATH)
-
-    ACTIVE_PROFILE = get_active_profile()
-
-    USER_ACCOUNT = _get_profile_or_fallback("user_account", "credentials")
-    USER_PASSWORD = _get_profile_or_fallback("user_password", "credentials")
-    GATEWAY_IP = _get_profile_or_fallback("gateway_ip", "network", fallback=GATEWAY_IP)
-    GATEWAY_HOST = f"http://{GATEWAY_IP}"
-    LOGIN_URL = _get_profile_or_fallback("login_url", "network", fallback=LOGIN_URL)
-    REFERER = _get_profile_or_fallback("referer", "network", fallback=REFERER)
-    WLAN_AC_IP = _get_profile_or_fallback("wlan_ac_ip", "network", fallback=WLAN_AC_IP)
-    WLAN_AC_NAME = _get_profile_or_fallback("wlan_ac_name", "network", fallback=WLAN_AC_NAME)
-    CONNECTIVITY_URL = _get("connectivity", "check_url", fallback=CONNECTIVITY_URL)
-    REQUEST_TIMEOUT_SECONDS = int(
-        _get("timing", "request_timeout_seconds", fallback=str(REQUEST_TIMEOUT_SECONDS))
-    )
-    CONNECTIVITY_TIMEOUT_SECONDS = int(
-        _get(
-            "timing",
-            "connectivity_timeout_seconds",
-            fallback=str(CONNECTIVITY_TIMEOUT_SECONDS),
-        )
-    )
-    CHECK_INTERVAL_SECONDS = int(
-        _get("timing", "check_interval_seconds", fallback=str(CHECK_INTERVAL_SECONDS))
-    )
-    ONLINE_CHECK_INTERVAL_SECONDS = int(
-        _get(
-            "timing",
-            "online_check_interval_seconds",
-            fallback=str(ONLINE_CHECK_INTERVAL_SECONDS),
-        )
-    )
-    LOGIN_RETRY_COUNT = int(
-        _get("timing", "login_retry_count", fallback=str(LOGIN_RETRY_COUNT))
-    )
-    BACKOFF_BASE_SECONDS = int(
-        _get("timing", "backoff_base_seconds", fallback=str(BACKOFF_BASE_SECONDS))
-    )
-    LOG_FILE = _get("logging", "log_file", fallback=LOG_FILE)
-    AUTH_TYPE = _get("auth", "auth_type", fallback=AUTH_TYPE)
-    AUTH_METHOD = _get("auth", "auth_method", fallback=AUTH_METHOD)
-    AUTH_SUCCESS_MARKERS = _get(
-        "auth", "auth_success_markers", fallback=AUTH_SUCCESS_MARKERS
-    )
-    AUTH_PARAMS = _load_auth_params(_parser)
-    SRUN_ACID = _get("srun", "acid", fallback=SRUN_ACID)
-    ENABLE_NOTIFICATIONS = _parse_bool(_get("ui", "enable_notifications", fallback="true"))
+    parser = _load_parser()
+    _maybe_encrypt_credentials(parser, _CONFIG_PATH)
+    staged_values = _load_runtime_values(parser, _snapshot_runtime_values())
+    _parser = parser
+    globals().update(staged_values)

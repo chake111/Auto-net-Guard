@@ -89,10 +89,14 @@ python guardian.py
   - `connectivity_timeout_seconds`：连通性检测超时秒数，默认 2 秒。
   - `check_interval_seconds`：检测间隔秒数。
   - `online_check_interval_seconds`：断线/在线状态下的快速检测间隔秒数，默认 1 秒。
+  - `offline_debounce_failures`：连续失败确认次数，默认 2 次，用于过滤单次网络抖动。
   - `login_retry_count`：登录失败最大重试次数。
   - `backoff_base_seconds`：重试退避基准秒数。
 - `[logging]`
   - `log_file`：日志文件名。
+- `[ui]`
+  - `enable_notifications`：是否弹出状态通知。
+  - `status_notification_cooldown_seconds`：状态通知冷却时间，默认 2 秒，用于抑制短时间内重复弹窗。
 
 ## 构建说明
 

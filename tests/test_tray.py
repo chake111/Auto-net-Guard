@@ -323,6 +323,25 @@ class TestTrayController:
         # _icon is None; _refresh_icon must not raise
         controller._refresh_icon()
 
+    def test_refresh_icon_does_not_rebuild_menu(self, monkeypatch):
+        import config as _cfg
+
+        monkeypatch.setattr(_cfg, "get_active_profile", lambda: "YKKCLOUD")
+
+        state = AppState()
+        state.status = NetStatus.ONLINE
+        stop_event = threading.Event()
+        controller = TrayController(state, stop_event)
+        mock_icon = MagicMock()
+        controller._icon = mock_icon
+
+        with patch.object(controller, "_build_menu") as build_menu:
+            controller._refresh_icon()
+
+        build_menu.assert_not_called()
+        assert mock_icon.icon is not None
+        assert mock_icon.title == state.tooltip()
+
     def test_refresh_icon_updates_tooltip_title(self, monkeypatch):
         import config as _cfg
 
@@ -339,13 +358,13 @@ class TestTrayController:
 
         assert mock_icon.title == state.tooltip()
 
-    def test_on_login_now_sets_status_to_offline(self):
+    def test_on_login_now_sets_status_to_logging_in(self):
         state = AppState()
         state.status = NetStatus.ONLINE
         stop_event = threading.Event()
         controller = TrayController(state, stop_event)
         controller._on_login_now(MagicMock(), MagicMock())
-        assert state.status == NetStatus.OFFLINE
+        assert state.status == NetStatus.LOGGING_IN
         assert state.wakeup_event.is_set()
 
     def test_on_switch_profile_sets_reload_and_wakeup(self):
@@ -356,15 +375,29 @@ class TestTrayController:
 
         with (
             patch("config.switch_profile") as switch_profile,
-            patch.object(controller, "_build_menu", return_value="menu"),
+            patch.object(controller, "_refresh_menu") as refresh_menu,
         ):
             controller._on_switch_profile("school")
 
         switch_profile.assert_called_once_with("school")
         assert state.config_changed.is_set()
         assert state.wakeup_event.is_set()
-        assert controller._icon.menu == "menu"
-        controller._icon.update_menu.assert_called_once()
+        refresh_menu.assert_called_once()
+
+    def test_on_toggle_autostart_refreshes_menu(self):
+        state = AppState()
+        stop_event = threading.Event()
+        controller = TrayController(state, stop_event)
+
+        with (
+            patch("tray.is_autostart_enabled", return_value=False),
+            patch("tray.enable_autostart") as enable_autostart,
+            patch.object(controller, "_refresh_menu") as refresh_menu,
+        ):
+            controller._on_toggle_autostart(MagicMock(), MagicMock())
+
+        enable_autostart.assert_called_once()
+        refresh_menu.assert_called_once()
 
     def test_on_quit_sets_stop_event_and_stops_icon(self):
         state = AppState()
@@ -482,6 +515,29 @@ class TestAppStateOnNotify:
         assert len(notifications) == 2
         assert "断网" in notifications[0][1]
         assert "失败" in notifications[1][1]
+
+
+class TestTrayControllerNotificationCooldown:
+    def test_send_notification_respects_cooldown(self, monkeypatch):
+        import config as _cfg
+
+        monkeypatch.setattr(_cfg, "ENABLE_NOTIFICATIONS", True)
+        monkeypatch.setattr(_cfg, "STATUS_NOTIFICATION_COOLDOWN_SECONDS", 5.0)
+
+        state = AppState()
+        stop_event = threading.Event()
+        controller = TrayController(state, stop_event)
+        mock_icon = MagicMock()
+        controller._icon = mock_icon
+
+        times = iter([100.0, 101.0, 106.0])
+        monkeypatch.setattr("tray.time.monotonic", lambda: next(times))
+
+        controller._send_notification("AutoNetGuard", "网络已恢复")
+        controller._send_notification("AutoNetGuard", "网络已恢复")
+        controller._send_notification("AutoNetGuard", "网络已恢复")
+
+        assert mock_icon.notify.call_count == 2
 
 
 # ---------------------------------------------------------------------------

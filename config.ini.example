@@ -128,6 +128,10 @@ check_interval_seconds = 30
 ; 用于更快发现主动注销、掉线以及恢复上线。
 online_check_interval_seconds = 1
 
+; 连续失败确认次数（次）
+; 用于过滤单次网络抖动，达到该次数后才切换为离线并触发登录。
+offline_debounce_failures = 2
+
 ; 登录失败后的最大重试次数
 login_retry_count = 3
 
@@ -143,6 +147,10 @@ log_file = service.log
 [ui]
 ; 是否在网络状态发生实质性变化时弹出系统通知（true / false）
 enable_notifications = true
+
+; 通知冷却时间（秒）
+; 用于抑制短时间内的重复状态通知。
+status_notification_cooldown_seconds = 2
 
 
 [auth]

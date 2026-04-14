@@ -506,3 +506,72 @@ class TestSwitchProfile:
 
         assert cfg.ACTIVE_PROFILE == "company"
         assert cfg.USER_ACCOUNT == "company_user"
+
+
+class TestReloadConfigAtomicity:
+    def test_reload_failure_leaves_existing_globals_unchanged(self, tmp_path, monkeypatch):
+        original_state = {
+            "ACTIVE_PROFILE": cfg.ACTIVE_PROFILE,
+            "USER_ACCOUNT": cfg.USER_ACCOUNT,
+            "USER_PASSWORD": cfg.USER_PASSWORD,
+            "GATEWAY_IP": cfg.GATEWAY_IP,
+            "LOGIN_URL": cfg.LOGIN_URL,
+            "REFERER": cfg.REFERER,
+            "WLAN_AC_IP": cfg.WLAN_AC_IP,
+            "WLAN_AC_NAME": cfg.WLAN_AC_NAME,
+            "CONNECTIVITY_URL": cfg.CONNECTIVITY_URL,
+            "REQUEST_TIMEOUT_SECONDS": cfg.REQUEST_TIMEOUT_SECONDS,
+            "CONNECTIVITY_TIMEOUT_SECONDS": cfg.CONNECTIVITY_TIMEOUT_SECONDS,
+            "CHECK_INTERVAL_SECONDS": cfg.CHECK_INTERVAL_SECONDS,
+            "ONLINE_CHECK_INTERVAL_SECONDS": cfg.ONLINE_CHECK_INTERVAL_SECONDS,
+            "OFFLINE_DEBOUNCE_FAILURES": cfg.OFFLINE_DEBOUNCE_FAILURES,
+            "LOGIN_RETRY_COUNT": cfg.LOGIN_RETRY_COUNT,
+            "BACKOFF_BASE_SECONDS": cfg.BACKOFF_BASE_SECONDS,
+            "LOG_FILE": cfg.LOG_FILE,
+            "AUTH_TYPE": cfg.AUTH_TYPE,
+            "AUTH_METHOD": cfg.AUTH_METHOD,
+            "AUTH_SUCCESS_MARKERS": cfg.AUTH_SUCCESS_MARKERS,
+            "AUTH_PARAMS": cfg.AUTH_PARAMS,
+            "SRUN_ACID": cfg.SRUN_ACID,
+            "STATUS_NOTIFICATION_COOLDOWN_SECONDS": cfg.STATUS_NOTIFICATION_COOLDOWN_SECONDS,
+            "ENABLE_NOTIFICATIONS": cfg.ENABLE_NOTIFICATIONS,
+        }
+
+        ini = tmp_path / "config.ini"
+        ini.write_text(
+            "[global]\nactive_profile = school\n"
+            "[profile:school]\n"
+            "user_account = school_user\n"
+            "user_password = school_pass\n"
+            "gateway_ip = 10.0.0.99\n"
+            "login_url = http://10.0.0.99:801/eportal/portal/login\n"
+            "referer = http://10.0.0.99/\n"
+            "wlan_ac_ip = 10.0.0.88\n"
+            "wlan_ac_name = TEST88\n"
+            "[connectivity]\ncheck_url = http://example.invalid/generate_204\n"
+            "[timing]\n"
+            "request_timeout_seconds = 9\n"
+            "connectivity_timeout_seconds = 3\n"
+            "check_interval_seconds = 31\n"
+            "online_check_interval_seconds = 2\n"
+            "offline_debounce_failures = 4\n"
+            "login_retry_count = 5\n"
+            "backoff_base_seconds = 2\n"
+            "[logging]\nlog_file = alt.log\n"
+            "[ui]\nenable_notifications = false\nstatus_notification_cooldown_seconds = 7\n"
+            "[auth]\nauth_type = generic_post\nauth_method = GET\nauth_success_markers = ok,done\n"
+            "[srun]\nacid = 9\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(cfg, "_CONFIG_PATH", ini)
+
+        def _boom(parser):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(cfg, "_load_auth_params", _boom)
+
+        with pytest.raises(RuntimeError):
+            cfg.reload_config()
+
+        for key, expected in original_state.items():
+            assert getattr(cfg, key) == expected

@@ -28,6 +28,7 @@ import requests
 
 import auth_plugins
 from auth_plugins import BaseAuthenticator
+from auth_plugins.base import _check_connectivity as _shared_check_connectivity
 
 try:
     import config as _cfg
@@ -59,7 +60,7 @@ LOGGER = logging.getLogger("autonetguard")
 
 def _next_check_interval(status: NetStatus) -> float:
     if status in (NetStatus.ONLINE, NetStatus.UNKNOWN, NetStatus.OFFLINE):
-        return float(min(_cfg.CHECK_INTERVAL_SECONDS, _cfg.ONLINE_CHECK_INTERVAL_SECONDS))
+        return float(_cfg.ONLINE_CHECK_INTERVAL_SECONDS)
     return float(_cfg.CHECK_INTERVAL_SECONDS)
 
 
@@ -133,6 +134,8 @@ def setup_logging() -> None:
 # ---------------------------------------------------------------------------
 
 def _is_process_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
     if psutil is not None:
         return psutil.pid_exists(pid)
     try:
@@ -187,9 +190,9 @@ def get_active_ip() -> str:
         return sock.getsockname()[0]
 
 
-def get_active_mac() -> str:
+def get_active_mac(active_ip: str | None = None) -> str:
     """Fetch the MAC for the network interface carrying the active local IP."""
-    active_ip = get_active_ip()
+    active_ip = get_active_ip() if active_ip is None else active_ip
 
     if psutil is not None:
         af_link = getattr(psutil, "AF_LINK", None)
@@ -212,48 +215,42 @@ def get_active_mac() -> str:
     raise RuntimeError("Unable to determine active interface MAC address.")
 
 
-def _build_login_params(ip: str, mac: str) -> dict[str, str]:
-    """Build Dr.COM portal query parameters.
-
-    .. deprecated::
-        This helper exists for backward compatibility with tests.  New code
-        should use :class:`auth_plugins.DrcomAuthenticator` directly.
-    """
-    from auth_plugins.drcom import DrcomAuthenticator  # noqa: PLC0415
-    return DrcomAuthenticator()._build_params(ip=ip, mac=mac)
-
-
 def check_connectivity(
     session: requests.Session,
     timeout: float | int | None = None,
 ) -> bool:
-    try:
-        response = session.get(
-            _cfg.CONNECTIVITY_URL,
-            timeout=_cfg.CONNECTIVITY_TIMEOUT_SECONDS if timeout is None else timeout,
-            allow_redirects=False,
-        )
-        return response.status_code == 204
-    except requests.RequestException as exc:
-        LOGGER.warning("Connectivity check failed: %s", exc)
-        return False
+    return _shared_check_connectivity(
+        session,
+        timeout=_cfg.CONNECTIVITY_TIMEOUT_SECONDS if timeout is None else timeout,
+        logger=LOGGER,
+    )
 
 
-def _do_login(session: requests.Session, ip: str, mac: str) -> bool:
-    """Perform a single Dr.COM login attempt.
+def _reload_authenticator_from_config() -> tuple[BaseAuthenticator, int] | None:
+    """Reload configuration and rebuild the authenticator strategy.
 
-    .. deprecated::
-        This helper exists for backward compatibility with tests.  New code
-        should use :class:`auth_plugins.DrcomAuthenticator` directly via
-        :func:`login_with_retry`.
+    Returns a ``(authenticator, offline_confirm_failures)`` tuple when reload
+    succeeds, or ``None`` when reloading fails and the caller should keep the
+    existing runtime state.
     """
-    from auth_plugins.drcom import DrcomAuthenticator  # noqa: PLC0415
-    return DrcomAuthenticator().login(session=session, ip=ip, mac=mac)
+    try:
+        _cfg.reload_config()
+        authenticator = auth_plugins.get_authenticator()
+        offline_confirm_failures = max(1, _cfg.OFFLINE_DEBOUNCE_FAILURES)
+        LOGGER.info(
+            "Config reloaded; using authenticator: %s",
+            type(authenticator).__name__,
+        )
+        return authenticator, offline_confirm_failures
+    except Exception as exc:  # pylint: disable=broad-except
+        LOGGER.exception("Failed to reload config: %s", exc)
+        return None
 
 
 def login_with_retry(
     session: requests.Session,
     authenticator: BaseAuthenticator | None = None,
+    active_ip: str | None = None,
 ) -> bool:
     """Attempt to authenticate, retrying up to ``config.LOGIN_RETRY_COUNT`` times.
 
@@ -267,19 +264,19 @@ def login_with_retry(
         automatically via :func:`auth_plugins.get_authenticator`.
     """
     _authenticator = authenticator if authenticator is not None else auth_plugins.get_authenticator()
+    cached_ip = active_ip if active_ip is not None else get_active_ip()
+    cached_mac = get_active_mac(cached_ip)
     for attempt in range(1, _cfg.LOGIN_RETRY_COUNT + 1):
         try:
-            ip = get_active_ip()
-            mac = get_active_mac()
             LOGGER.info(
                 "Login attempt %s/%s | ip=%s | mac=%s | auth=%s",
                 attempt,
                 _cfg.LOGIN_RETRY_COUNT,
-                ip,
-                mac,
+                cached_ip,
+                cached_mac,
                 type(_authenticator).__name__,
             )
-            if _authenticator.login(session=session, ip=ip, mac=mac):
+            if _authenticator.login(session=session, ip=cached_ip, mac=cached_mac):
                 LOGGER.info("Login success on attempt %s.", attempt)
                 return True
             LOGGER.warning("Login rejected on attempt %s.", attempt)
@@ -330,18 +327,17 @@ def guardian_target(state: AppState, stop_event: threading.Event) -> None:
     LOGGER.info("Using authenticator: %s", type(authenticator).__name__)
 
     previous_ip = ""
+    consecutive_probe_failures = 0
+    offline_confirm_failures = max(1, _cfg.OFFLINE_DEBOUNCE_FAILURES)
 
     while not stop_event.is_set():
         # Re-create the authenticator when the user saves new settings so that
         # a changed auth_type takes effect without a full restart.
         if state.config_changed.is_set():
             state.config_changed.clear()
-            _cfg.reload_config()
-            authenticator = auth_plugins.get_authenticator()
-            LOGGER.info(
-                "Config reloaded; using authenticator: %s",
-                type(authenticator).__name__,
-            )
+            reload_result = _reload_authenticator_from_config()
+            if reload_result is not None:
+                authenticator, offline_confirm_failures = reload_result
 
         try:
             current_ip = get_active_ip()
@@ -351,19 +347,48 @@ def guardian_target(state: AppState, stop_event: threading.Event) -> None:
                 )
                 previous_ip = current_ip
 
-            if check_connectivity(session):
+            connectivity_ok = check_connectivity(session)
+            if connectivity_ok:
+                if consecutive_probe_failures:
+                    LOGGER.info(
+                        "Connectivity recovered after %s failed probe(s).",
+                        consecutive_probe_failures,
+                    )
+                consecutive_probe_failures = 0
                 LOGGER.info("Connectivity healthy.")
                 state.status = NetStatus.ONLINE
             else:
-                LOGGER.warning("Disconnected detected, triggering login.")
-                state.status = NetStatus.OFFLINE
-                state.increment_disconnect()
+                consecutive_probe_failures += 1
+                if state.status != NetStatus.OFFLINE and consecutive_probe_failures < offline_confirm_failures:
+                    LOGGER.warning(
+                        "Connectivity probe failed (%s/%s); waiting for confirmation.",
+                        consecutive_probe_failures,
+                        offline_confirm_failures,
+                    )
+                    _wait_for_wakeup_or_timeout(
+                        stop_event,
+                        state.wakeup_event,
+                        _next_check_interval(state.status),
+                    )
+                    continue
 
-                if login_with_retry(session, authenticator):
+                if state.status != NetStatus.OFFLINE:
+                    LOGGER.warning(
+                        "Disconnected detected after %s failed probes, triggering login.",
+                        consecutive_probe_failures,
+                    )
+                    state.status = NetStatus.LOGGING_IN
+                    state.increment_disconnect()
+                else:
+                    LOGGER.warning("Disconnected detected, triggering login.")
+                    state.status = NetStatus.LOGGING_IN
+
+                if login_with_retry(session, authenticator, current_ip):
                     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     state.last_login_time = now
                     if check_connectivity(session):
                         LOGGER.info("Connectivity restored.")
+                        consecutive_probe_failures = 0
                         state.status = NetStatus.ONLINE
                     else:
                         LOGGER.warning(

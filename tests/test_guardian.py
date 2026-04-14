@@ -12,7 +12,6 @@ import requests
 import guardian
 from guardian import (
     _normalize_mac,
-    _build_login_params,
     _is_process_running,
     _next_check_interval,
     _wait_for_wakeup_or_timeout,
@@ -118,101 +117,6 @@ class TestCheckConnectivity:
 
 
 # ---------------------------------------------------------------------------
-# _build_login_params
-# ---------------------------------------------------------------------------
-
-class TestBuildLoginParams:
-    def _params(self):
-        return _build_login_params(ip="192.168.1.100", mac="aabbccddeeff")
-
-    def test_all_required_keys_present(self):
-        required = [
-            "callback",
-            "login_method",
-            "user_account",
-            "user_password",
-            "wlan_user_ip",
-            "wlan_user_mac",
-            "wlan_ac_ip",
-            "wlan_ac_name",
-            "jsVersion",
-            "lang",
-        ]
-        params = self._params()
-        for key in required:
-            assert key in params, f"Missing param key: {key!r}"
-
-    def test_ip_and_mac_injected_correctly(self):
-        params = _build_login_params(ip="10.0.0.1", mac="112233445566")
-        assert params["wlan_user_ip"] == "10.0.0.1"
-        assert params["wlan_user_mac"] == "112233445566"
-
-    def test_callback_is_dr1003(self):
-        assert self._params()["callback"] == "dr1003"
-
-    def test_all_param_values_are_strings(self):
-        params = self._params()
-        for k, v in params.items():
-            assert isinstance(v, str), f"Param {k!r} has non-string value: {v!r}"
-
-    def test_lang_is_chinese(self):
-        assert self._params()["lang"] == "zh-cn"
-
-
-# ---------------------------------------------------------------------------
-# _do_login (internal)
-# ---------------------------------------------------------------------------
-
-class TestDoLogin:
-    def _make_session(self, text: str, status: int = 200) -> MagicMock:
-        session = MagicMock()
-        response = MagicMock()
-        response.status_code = status
-        response.text = text
-        response.raise_for_status = MagicMock()
-        session.get.return_value = response
-        return session
-
-    def test_success_keyword_in_response(self):
-        session = self._make_session("auth success")
-        assert guardian._do_login(session, ip="10.0.0.1", mac="aabbccddeeff") is True
-
-    def test_portal_success_marker(self):
-        session = self._make_session("portal_success redirect_url")
-        assert guardian._do_login(session, ip="10.0.0.1", mac="aabbccddeeff") is True
-
-    def test_result_1_json_string_marker(self):
-        session = self._make_session('{"result":"1","msg":"ok"}')
-        assert guardian._do_login(session, ip="10.0.0.1", mac="aabbccddeeff") is True
-
-    def test_result_1_integer_json_marker(self):
-        session = self._make_session('{"result":1}')
-        assert guardian._do_login(session, ip="10.0.0.1", mac="aabbccddeeff") is True
-
-    def test_chinese_success_marker(self):
-        session = self._make_session("登录成功，欢迎使用")
-        assert guardian._do_login(session, ip="10.0.0.1", mac="aabbccddeeff") is True
-
-    def test_no_success_marker_returns_false(self):
-        session = self._make_session("authentication failed")
-        assert guardian._do_login(session, ip="10.0.0.1", mac="aabbccddeeff") is False
-
-    def test_http_error_propagates(self):
-        session = MagicMock()
-        response = MagicMock()
-        response.raise_for_status.side_effect = requests.HTTPError("403 Forbidden")
-        session.get.return_value = response
-        with pytest.raises(requests.HTTPError):
-            guardian._do_login(session, ip="10.0.0.1", mac="aabbccddeeff")
-
-    def test_referer_header_included(self):
-        session = self._make_session("success")
-        guardian._do_login(session, ip="10.0.0.1", mac="aabbccddeeff")
-        _, kwargs = session.get.call_args
-        assert "Referer" in kwargs.get("headers", {})
-
-
-# ---------------------------------------------------------------------------
 # login_with_retry
 # ---------------------------------------------------------------------------
 
@@ -309,6 +213,20 @@ class TestLoginWithRetry:
         ):
             assert login_with_retry(session) is True
         mock_auth.login.assert_called_once()
+
+    def test_reuses_cached_mac_when_ip_stays_the_same(self):
+        session = MagicMock()
+        auth = self._make_authenticator(return_value=False)
+
+        with (
+            patch("guardian.get_active_ip", return_value="10.0.0.1") as get_ip,
+            patch("guardian.get_active_mac", return_value="aabbccddeeff") as get_mac,
+            patch("guardian.time.sleep"),
+        ):
+            login_with_retry(session, auth)
+
+        get_ip.assert_called_once()
+        get_mac.assert_called_once_with("10.0.0.1")
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +329,7 @@ class TestGuardianTarget:
 
         assert state.status == NetStatus.ONLINE
 
-    def test_login_triggered_and_status_offline_when_connectivity_fails_and_login_fails(self):
+    def test_first_connectivity_failure_is_debounced(self):
         state = AppState()
         stop_event = threading.Event()
 
@@ -419,8 +337,60 @@ class TestGuardianTarget:
             stop_event.set()
             return False
 
-        def fake_login(session, authenticator):
-            assert state.status == NetStatus.OFFLINE
+        login_mock = MagicMock(return_value=False)
+
+        with (
+            patch("guardian.get_active_ip", return_value="10.0.0.1"),
+            patch("guardian.check_connectivity", side_effect=fake_check),
+            patch("guardian.login_with_retry", login_mock),
+            patch("guardian.setup_logging"),
+            patch("guardian.auth_plugins.get_authenticator", return_value=self._make_auth()),
+        ):
+            guardian_target(state, stop_event)
+
+        assert state.status == NetStatus.UNKNOWN
+        assert state.disconnect_count == 0
+        login_mock.assert_not_called()
+
+    def test_second_consecutive_failure_triggers_offline_and_login(self):
+        state = AppState()
+        stop_event = threading.Event()
+        call_count = {"n": 0}
+
+        def fake_check(session):
+            call_count["n"] += 1
+            if call_count["n"] >= 2:
+                stop_event.set()
+            return False
+
+        login_mock = MagicMock(return_value=False)
+
+        with (
+            patch("guardian.get_active_ip", return_value="10.0.0.1"),
+            patch("guardian.check_connectivity", side_effect=fake_check),
+            patch("guardian.login_with_retry", login_mock),
+            patch("guardian.setup_logging"),
+            patch("guardian.auth_plugins.get_authenticator", return_value=self._make_auth()),
+        ):
+            guardian_target(state, stop_event)
+
+        assert state.status == NetStatus.OFFLINE
+        assert state.disconnect_count == 1
+        login_mock.assert_called_once()
+
+    def test_login_triggered_and_status_offline_when_connectivity_fails_and_login_fails(self):
+        state = AppState()
+        stop_event = threading.Event()
+        call_count = {"n": 0}
+
+        def fake_check(session):
+            call_count["n"] += 1
+            if call_count["n"] >= 2:
+                stop_event.set()
+            return False
+
+        def fake_login(session, authenticator, active_ip=None):  # noqa: ARG001
+            assert state.status == NetStatus.LOGGING_IN
             return False
 
         with (
@@ -441,15 +411,19 @@ class TestGuardianTarget:
 
         def fake_check(session):
             check_calls["n"] += 1
-            stop_event.set()  # always trigger exit
-            if check_calls["n"] == 1:
-                return False  # initial probe fails → login triggered
-            return True  # post-login probe succeeds
+            if check_calls["n"] >= 3:
+                stop_event.set()
+                return True
+            return False
+
+        def fake_login(session, authenticator, active_ip=None):  # noqa: ARG001
+            assert state.status == NetStatus.LOGGING_IN
+            return True
 
         with (
             patch("guardian.get_active_ip", return_value="10.0.0.1"),
             patch("guardian.check_connectivity", side_effect=fake_check),
-            patch("guardian.login_with_retry", return_value=True),
+            patch("guardian.login_with_retry", side_effect=fake_login),
             patch("guardian.setup_logging"),
             patch("guardian.auth_plugins.get_authenticator", return_value=self._make_auth()),
         ):
@@ -460,9 +434,12 @@ class TestGuardianTarget:
     def test_disconnect_counter_incremented_on_connectivity_loss(self):
         state = AppState()
         stop_event = threading.Event()
+        call_count = {"n": 0}
 
         def fake_check(session):
-            stop_event.set()
+            call_count["n"] += 1
+            if call_count["n"] >= 2:
+                stop_event.set()
             return False
 
         with (
@@ -556,6 +533,29 @@ class TestGuardianTarget:
         # get_authenticator should have been called at least twice (once at
         # startup and once after config_changed was detected).
         assert get_auth_calls["n"] >= 2
+
+    def test_config_reload_failure_keeps_existing_authenticator(self):
+        state = AppState()
+        stop_event = threading.Event()
+        state.config_changed.set()
+
+        def fake_check(session):
+            stop_event.set()
+            return True
+
+        mock_auth = self._make_auth()
+
+        with (
+            patch("guardian.get_active_ip", return_value="10.0.0.1"),
+            patch("guardian.check_connectivity", side_effect=fake_check),
+            patch("guardian.setup_logging"),
+            patch("guardian.auth_plugins.get_authenticator", return_value=mock_auth) as get_auth,
+            patch("guardian._cfg.reload_config", side_effect=RuntimeError("boom")),
+        ):
+            guardian_target(state, stop_event)
+
+        get_auth.assert_called_once()
+        assert state.status == NetStatus.ONLINE
 
     def test_wait_helper_returns_immediately_on_wakeup(self):
         class FakeEvent:
